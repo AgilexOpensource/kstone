@@ -1,0 +1,7 @@
+{
+  global:
+    extern "C++" { kstone::*; };
+    _ZTIN6kstone*; _ZTSN6kstone*; _ZTVN6kstone*; _ZTTN6kstone*; _ZGVN6kstone*;
+    kstone_engine_*;
+  local: *;
+};

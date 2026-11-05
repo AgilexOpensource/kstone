@@ -1,0 +1,125 @@
+<?xml version="1.0"?>
+<!-- Differential-drive chassis with a lift and a 3-joint arm.
+     base_link is the root; load with RootJoint::free_flyer. The root has no
+     nonholonomic constraint, so lateral base motion is not prevented by the model. -->
+<robot name="diff_chassis">
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0.12" />
+      <geometry><box size="0.52 0.38 0.16" /></geometry>
+    </visual>
+    <inertial>
+      <origin xyz="0 0 0.12" />
+      <mass value="25" />
+      <inertia ixx="0.35" ixy="0" ixz="0" iyy="0.65" iyz="0" izz="0.85" />
+    </inertial>
+  </link>
+
+  <link name="left_wheel">
+    <inertial>
+      <mass value="0.8" />
+      <inertia ixx="0.002" ixy="0" ixz="0" iyy="0.002" iyz="0" izz="0.004" />
+    </inertial>
+  </link>
+  <joint name="left_wheel_joint" type="continuous">
+    <parent link="base_link" />
+    <child link="left_wheel" />
+    <origin xyz="0 0.215 0.10" rpy="-1.570796 0 0" />
+    <axis xyz="0 0 1" />
+    <limit effort="20" velocity="10" />
+  </joint>
+
+  <link name="right_wheel">
+    <inertial>
+      <mass value="0.8" />
+      <inertia ixx="0.002" ixy="0" ixz="0" iyy="0.002" iyz="0" izz="0.004" />
+    </inertial>
+  </link>
+  <joint name="right_wheel_joint" type="continuous">
+    <parent link="base_link" />
+    <child link="right_wheel" />
+    <origin xyz="0 -0.215 0.10" rpy="-1.570796 0 0" />
+    <axis xyz="0 0 1" />
+    <limit effort="20" velocity="10" />
+  </joint>
+
+  <link name="front_caster" />
+  <joint name="front_caster_mount" type="fixed">
+    <parent link="base_link" />
+    <child link="front_caster" />
+    <origin xyz="0.20 0 0.045" />
+  </joint>
+
+  <link name="rear_caster" />
+  <joint name="rear_caster_mount" type="fixed">
+    <parent link="base_link" />
+    <child link="rear_caster" />
+    <origin xyz="-0.20 0 0.045" />
+  </joint>
+
+  <link name="lift_link">
+    <inertial>
+      <origin xyz="0 0 0.15" />
+      <mass value="2.0" />
+      <inertia ixx="0.02" ixy="0" ixz="0" iyy="0.02" iyz="0" izz="0.002" />
+    </inertial>
+  </link>
+  <joint name="lift_joint" type="prismatic">
+    <parent link="base_link" />
+    <child link="lift_link" />
+    <origin xyz="0.10 0 0.20" />
+    <axis xyz="0 0 1" />
+    <limit lower="0" upper="0.40" effort="200" velocity="0.2" />
+  </joint>
+
+  <link name="shoulder_link">
+    <inertial>
+      <mass value="1.0" />
+      <inertia ixx="0.002" ixy="0" ixz="0" iyy="0.002" iyz="0" izz="0.002" />
+    </inertial>
+  </link>
+  <joint name="shoulder_yaw_joint" type="revolute">
+    <parent link="lift_link" />
+    <child link="shoulder_link" />
+    <origin xyz="0 0 0.30" />
+    <axis xyz="0 0 1" />
+    <limit lower="-2.6" upper="2.6" effort="50" velocity="2" />
+  </joint>
+
+  <link name="upper_arm_link">
+    <inertial>
+      <origin xyz="0.15 0 0" />
+      <mass value="1.0" />
+      <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.008" iyz="0" izz="0.008" />
+    </inertial>
+  </link>
+  <joint name="shoulder_pitch_joint" type="revolute">
+    <parent link="shoulder_link" />
+    <child link="upper_arm_link" />
+    <origin xyz="0 0 0.05" />
+    <axis xyz="0 -1 0" />
+    <limit lower="-1.5" upper="1.5" effort="50" velocity="2" />
+  </joint>
+
+  <link name="forearm_link">
+    <inertial>
+      <origin xyz="0.125 0 0" />
+      <mass value="0.6" />
+      <inertia ixx="0.0005" ixy="0" ixz="0" iyy="0.004" iyz="0" izz="0.004" />
+    </inertial>
+  </link>
+  <joint name="elbow_joint" type="revolute">
+    <parent link="upper_arm_link" />
+    <child link="forearm_link" />
+    <origin xyz="0.30 0 0" />
+    <axis xyz="0 -1 0" />
+    <limit lower="-2.4" upper="2.4" effort="30" velocity="2" />
+  </joint>
+
+  <link name="tool" />
+  <joint name="tool_joint" type="fixed">
+    <parent link="forearm_link" />
+    <child link="tool" />
+    <origin xyz="0.25 0 0" />
+  </joint>
+</robot>

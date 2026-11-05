@@ -1,0 +1,207 @@
+# Omni chassis + 4-DoF torso + 2-DoF head + two 7-DoF arms with parallel grippers; primitive geometry only.
+# Run:  kstone run examples/omni_dual_arm/omni_dual_arm.yaml --realtime --serve 127.0.0.1:7311
+model:
+  file: omni_dual_arm.urdf
+  root: free_flyer
+  mimic: coupled
+  joint_limits:
+    velocity:
+      left_gripper_joint: 1.0
+      right_gripper_joint: 1.0
+    position:
+      lower:
+        left_arm_joint_4: 0.0873  # a fully stretched elbow can fold outward and get stuck
+        right_arm_joint_4: 0.0873
+        torso_joint_2: 0.2618
+      upper:
+        torso_joint_2: 2.2
+rate_hz: 50  # convergence is per cycle, so a higher rate also raises the effective gain
+feedback_timeout_s: 0.25
+solver:
+  mode: layered_independent
+  damping: 0.001
+robot:
+  type: loopback
+  initial:
+    torso_joint_1: -1.04719
+    torso_joint_2: 1.74533
+    torso_joint_3: -0.69813
+    left_arm_joint_2: 1.57
+    left_arm_joint_3: -1.57
+    left_arm_joint_4: 1.57
+    right_arm_joint_2: 1.57
+    right_arm_joint_3: 1.57
+    right_arm_joint_4: 1.57
+    left_gripper_joint: 0.05
+    right_gripper_joint: 0.05
+modules:
+  chassis:
+    type: chassis
+    chassis:
+      odom_timeout_s: 0.25
+      command_timeout_s: 0.25
+      kinematics: omni
+      base_frame: base_link
+      max_linear: 1.0
+      max_angular: 3.0
+      max_linear_acceleration: 2.5
+      max_linear_deceleration: 2.5
+      max_linear_reversal_deceleration: 2.5
+      max_angular_acceleration: 5.0
+      max_angular_deceleration: 5.0
+      max_angular_reversal_deceleration: 5.0
+      max_linear_jerk: 10.0
+      max_angular_jerk: 15.0
+      arrival_position_tolerance: 0.001
+      arrival_rotation_tolerance: 0.002
+      target_translation_deadband: 0.02
+      target_rotation_deadband: 0.035
+  waist:
+    type: frame_task
+    frame: torso_link_4
+    joints: [torso_joint_1, torso_joint_2, torso_joint_3, torso_joint_4]
+    reference: base_link
+    weight: 1
+    position_weight: [5, 0, 5]
+    orientation_weight: [1, 1, 1]
+    world_axes: true
+    lm_damping: 1.5
+    position_tolerance: 0.001
+    orientation_tolerance: 0.01
+    task: {level: 0}
+    home_motion: {velocity_scale: 0.1667, timeout_s: 2.0}
+    trajectory:
+      lead_speed_scale: 3.0
+      translation: {velocity: 1.0, acceleration: 2.5, deceleration: 2.5, reversal_deceleration: 5, jerk: 25}
+      rotation: {velocity: 3.0, acceleration: 5, deceleration: 5, reversal_deceleration: 10, jerk: 50}
+  left:
+    type: frame_task
+    frame: left_tool_frame
+    joints: [left_arm_joint_1, left_arm_joint_2, left_arm_joint_3, left_arm_joint_4, left_arm_joint_5, left_arm_joint_6, left_arm_joint_7]
+    reference: base_link
+    weight: 5
+    orientation_weight: [0.2, 0.2, 0.2]
+    lm_damping: 1.5
+    task: {level: 1}
+    # Arm home targets ride the waist, so leave room for a long waist home.
+    home_motion: {velocity_scale: 0.1, timeout_s: 2.0}
+    trajectory:
+      lead_speed_scale: 5.0
+      translation: {velocity: 2.0, acceleration: 20, deceleration: 20, reversal_deceleration: 40, jerk: 200}
+      rotation: {velocity: 5.0, acceleration: 10, deceleration: 10, reversal_deceleration: 20, jerk: 100}
+  right:
+    type: frame_task
+    frame: right_tool_frame
+    joints: [right_arm_joint_1, right_arm_joint_2, right_arm_joint_3, right_arm_joint_4, right_arm_joint_5, right_arm_joint_6, right_arm_joint_7]
+    reference: base_link
+    weight: 5
+    orientation_weight: [0.2, 0.2, 0.2]
+    lm_damping: 1.5
+    task: {level: 1}
+    home_motion: {velocity_scale: 0.1, timeout_s: 2.0}
+    trajectory:
+      lead_speed_scale: 5.0
+      translation: {velocity: 2.0, acceleration: 20, deceleration: 20, reversal_deceleration: 40, jerk: 200}
+      rotation: {velocity: 5.0, acceleration: 10, deceleration: 10, reversal_deceleration: 20, jerk: 100}
+  left_null:
+    type: null_space_preference
+    primary: left
+    reference: initial
+    posture_weight: 0.05
+    manipulability_weight: 0.05
+  right_null:
+    type: null_space_preference
+    primary: right
+    reference: initial
+    posture_weight: 0.05
+    manipulability_weight: 0.05
+  torso:
+    type: joint_target
+    joints: [torso_joint_1, torso_joint_2, torso_joint_3, torso_joint_4]
+    task: {level: 0}  # joint control outranks the pose tasks sharing these joints
+    home_motion: {velocity_scale: 0.1667, timeout_s: 2.0}
+    claim_idle: true
+    release_after_s: 0.25
+  left_arm:
+    type: joint_target
+    joints: [left_arm_joint_1, left_arm_joint_2, left_arm_joint_3, left_arm_joint_4, left_arm_joint_5, left_arm_joint_6, left_arm_joint_7]
+    task: {level: 0}
+    home_motion: {velocity_scale: 0.1667, timeout_s: 2.0}
+    claim_idle: true
+    release_after_s: 0.25
+  right_arm:
+    type: joint_target
+    joints: [right_arm_joint_1, right_arm_joint_2, right_arm_joint_3, right_arm_joint_4, right_arm_joint_5, right_arm_joint_6, right_arm_joint_7]
+    task: {level: 0}
+    home_motion: {velocity_scale: 0.1667, timeout_s: 2.0}
+    claim_idle: true
+    release_after_s: 0.25
+  grippers:
+    type: joint_target
+    joints: [left_gripper_joint, right_gripper_joint]
+    task: {level: 0}
+    claim_idle: true  # nothing else drives them: always under joint control
+    release_after_s: 0.25
+  head:
+    type: joint_target
+    joints: [head_pitch_joint, head_yaw_joint]
+    task: {level: 0}
+    home_motion: {velocity_scale: 0.1667, timeout_s: 2.0}
+    claim_idle: true
+    release_after_s: 0.25
+  gaze:
+    type: gaze
+    frame: head_yaw_link
+    joints: [head_pitch_joint, head_yaw_joint]
+    frames: [left_tool_frame, right_tool_frame]
+    max_velocity: 3.0
+    target_idle_s: 5.0
+  com:
+    type: center_of_mass
+    frame: base_link
+    polygon: [[0.216, 0.216], [-0.216, 0.211], [-0.216, -0.211], [0.216, -0.216]]
+    margin: 0.05
+    recovery_tasks: [waist]
+    closed_loop: true
+    payloads:
+      - {frame: left_tool_frame, mass: 3.0}
+      - {frame: right_tool_frame, mass: 3.0}
+  self_collision:
+    type: self_collision
+    urdf: omni_dual_arm.urdf
+    groups:
+      - {name: left_arm, joint_prefixes: [left_arm_, left_gripper_]}
+      - {name: right_arm, joint_prefixes: [right_arm_, right_gripper_]}
+    exclude_pairs:
+      - [head_base_link, head_yaw_link]
+      - [torso_link_4, head_yaw_link]
+      - [left_arm_base, left_arm_link_2]
+      - [right_arm_base, right_arm_link_2]
+      - [left_arm_link_5, left_arm_link_7]
+      - [right_arm_link_5, right_arm_link_7]
+      - [left_gripper_finger_1, left_gripper_finger_2]
+      - [right_gripper_finger_1, right_gripper_finger_2]
+      # Let the two grippers come close for bimanual work
+      - [left_gripper_base, right_gripper_base]
+      - [left_gripper_base, right_gripper_finger_1]
+      - [left_gripper_base, right_gripper_finger_2]
+      - [left_gripper_finger_1, right_gripper_base]
+      - [left_gripper_finger_1, right_gripper_finger_1]
+      - [left_gripper_finger_1, right_gripper_finger_2]
+      - [left_gripper_finger_2, right_gripper_base]
+      - [left_gripper_finger_2, right_gripper_finger_1]
+      - [left_gripper_finger_2, right_gripper_finger_2]
+    closed_loop: true
+    constraint: {d_min: 0.002, activation_margin: 0.01, hysteresis: 0.005, gain: 1.5, approach_deceleration: 20}
+  obstacles:  # independent of each other, so they may overlap
+    type: world_collision
+    velocity_timeout: 0.2
+    urdf: omni_dual_arm.urdf
+    obstacles:
+      - name: table
+        shape: {type: box, size: [0.4, 0.8, 0.04]}
+        pose: {translation: [0.615, 0, 0.427]}
+      - name: box2
+        shape: {type: box, size: [0.2, 0.2, 0.2]}
+        pose: {translation: [0.655, 0.1, 0.469]}
+    constraint: {d_min: 0.002, activation_margin: 0.02, hysteresis: 0.005, gain: 1.5}

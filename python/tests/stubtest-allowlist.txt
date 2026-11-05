@@ -1,0 +1,4 @@
+# pybind11 classes use their own metaclass.
+kstone\.(DebugServer|Engine|Model|Module|SolveResult|Solver|Workspace)
+# Classes built only by factories raise TypeError from a generic __init__.
+kstone\.(DebugServer|Engine|Model|Module|SolveResult|Solver)\.__init__

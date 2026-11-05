@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<!-- Lets colcon build kstone as a plain CMake package; the library itself does not depend on ROS. -->
+<package format="3">
+  <name>kstone</name>
+  <version>0.0.1</version>
+  <description>Inverse kinematics and control for robots</description>
+  <maintainer email="1506289682@qq.com">kehuanjack</maintainer>
+  <license>Apache-2.0</license>
+  <url type="repository">https://github.com/AgilexOpensource/kstone</url>
+
+  <buildtool_depend>cmake</buildtool_depend>
+  <depend>eigen</depend>
+  <depend>pinocchio</depend>
+
+  <export>
+    <build_type>cmake</build_type>
+  </export>
+</package>

@@ -1,0 +1,22 @@
+#pragma once
+
+#include "kstone/core/export.hpp"
+
+#define KSTONE_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define KSTONE_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define KSTONE_VERSION_PATCH @PROJECT_VERSION_PATCH@
+#define KSTONE_VERSION_STRING "@PROJECT_VERSION@"
+
+namespace kstone {
+
+struct Version {
+    int major;
+    int minor;
+    int patch;
+};
+
+// Version of the linked library, which may differ from the KSTONE_VERSION_* macros a module was built against.
+KSTONE_EXPORT Version library_version() noexcept;
+KSTONE_EXPORT const char* library_version_string() noexcept;
+
+}  // namespace kstone

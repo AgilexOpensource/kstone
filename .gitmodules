@@ -1,0 +1,12 @@
+[submodule "third_party/daqp"]
+	path = third_party/daqp
+	url = https://github.com/darnstrom/daqp.git
+[submodule "third_party/ruckig"]
+	path = third_party/ruckig
+	url = https://github.com/pantor/ruckig.git
+[submodule "third_party/yaml-cpp"]
+	path = third_party/yaml-cpp
+	url = https://github.com/jbeder/yaml-cpp.git
+[submodule "third_party/doctest"]
+	path = third_party/doctest
+	url = https://github.com/doctest/doctest.git

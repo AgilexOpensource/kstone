@@ -1,0 +1,24 @@
+# Minimal end-to-end configuration: arm.urdf on an ideal loopback robot.
+model:
+  file: arm.urdf
+rate_hz: 100
+realtime: false
+solver:
+  mode: weighted
+robot:
+  type: loopback
+modules:
+  tool:
+    type: frame_task
+    frame: tool
+    gain: 0.5
+    trajectory:
+      translation: {velocity: 0.3, acceleration: 1, jerk: 10}
+      rotation: {velocity: 1, acceleration: 2, jerk: 20}
+  arm:
+    type: joint_target
+    joints: [j1, j2, j3]
+    priority: 1
+  fingers:
+    type: joint_target
+    joints: [finger_left_joint]  # finger_right_joint mimics it

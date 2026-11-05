@@ -1,0 +1,32 @@
+name: venv
+description: Sets up Python and a build venv on PATH with the given Pinocchio stack.
+
+inputs:
+  python:
+    description: Python version
+    required: true
+  deps:
+    description: Extra pip requirements, space separated
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v7
+      with:
+        python-version: ${{ inputs.python }}
+        cache: pip
+        cache-dependency-path: |
+          pyproject.toml
+          .github/ci/plan.py
+    - name: Install build dependencies
+      shell: bash
+      env:
+        DEPS: ${{ inputs.deps }}
+      run: |
+        python -m venv "$RUNNER_TEMP/venv"
+        echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+        eval "set -- $DEPS"
+        "$RUNNER_TEMP/venv/bin/python" -m pip install scikit-build-core==1.1.1 pybind11==3.1.0 \
+          "cmeel-eigen~=3.4.0" ninja cmake "numpy>=2.0" mypy "$@"
+        { echo "### Build dependencies"; echo '```'; "$RUNNER_TEMP/venv/bin/python" -m pip list; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+
+# CMake / Colcon
+build/
+install/
+log/
+.cache/
+CMakeUserPresets.json
+
+# Native artifacts
+*.so
+*.a
+*.o
+*.obj
+*.pdb
+
+# Logs
+*.log

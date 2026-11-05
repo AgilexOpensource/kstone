@@ -1,0 +1,15 @@
+BasedOnStyle: Google
+IndentWidth: 4
+ColumnLimit: 110
+AccessModifierOffset: -2
+DerivePointerAlignment: false
+PointerAlignment: Left
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^"kstone/'
+    Priority: 1
+  - Regex: '^<(Eigen|pinocchio|coal|ruckig|yaml-cpp|doctest)/'
+    Priority: 2
+  - Regex: '^<.*>'
+    Priority: 3
+ReflowComments: false

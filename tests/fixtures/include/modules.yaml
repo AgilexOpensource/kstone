@@ -1,0 +1,8 @@
+tool:
+  type: frame_task
+  frame: tool
+  gain: ${TOOL_GAIN:-0.5}
+  trajectory: !include trajectory.yaml
+arm:
+  type: joint_target
+  joints: [j1, j2, j3]

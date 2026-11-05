@@ -1,0 +1,13 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Eigen3 CONFIG)
+find_dependency(Threads)
+if(@KSTONE_CONFIG_STATIC@)
+  # A static libkstone carries Pinocchio's symbols as unresolved references.
+  set(Boost_NO_WARN_NEW_VERSIONS ON)
+  find_dependency(pinocchio CONFIG)
+endif()
+
+include(${CMAKE_CURRENT_LIST_DIR}/kstoneTargets.cmake)
+check_required_components(kstone)

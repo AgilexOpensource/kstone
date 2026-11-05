@@ -1,0 +1,361 @@
+name: ci
+
+# Started by hand. Format, sdist, pip and ros on x86_64 always run; the slower jobs in .github/ci/plan.py are ticked per run.
+on:
+  workflow_dispatch:
+    inputs:
+      all:
+        description: "Every job below"
+        type: boolean
+        default: false
+      aarch64:
+        description: "aarch64 for pip, isolated and ros"
+        type: boolean
+        default: false
+      debug:
+        description: "debug preset"
+        type: boolean
+        default: false
+      asan:
+        description: "asan preset (~16 min)"
+        type: boolean
+        default: false
+      tsan:
+        description: "tsan preset (~12 min)"
+        type: boolean
+        default: false
+      isolated:
+        description: "isolated: install the sdist with build isolation"
+        type: boolean
+        default: false
+      source:
+        description: "source: the README C++ recipe"
+        type: boolean
+        default: false
+      tag:
+        description: "Release tag such as v0.0.1; forces every job, and when every job passes the tag and a draft release with the sdist are created"
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}-${{ inputs.tag }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    outputs:
+      pip: ${{ steps.plan.outputs.pip }}
+      presets: ${{ steps.plan.outputs.presets }}
+      preset_runner: ${{ steps.plan.outputs.preset_runner }}
+      isolated: ${{ steps.plan.outputs.isolated }}
+      ros: ${{ steps.plan.outputs.ros }}
+      source: ${{ steps.plan.outputs.source }}
+      tag: ${{ steps.plan.outputs.tag }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: plan
+        env:
+          ALL: ${{ inputs.all }}
+          AARCH64: ${{ inputs.aarch64 }}
+          DEBUG: ${{ inputs.debug }}
+          ASAN: ${{ inputs.asan }}
+          TSAN: ${{ inputs.tsan }}
+          ISOLATED: ${{ inputs.isolated }}
+          SOURCE: ${{ inputs.source }}
+          TAG: ${{ inputs.tag }}
+        run: python3 .github/ci/plan.py
+
+  format:
+    needs: plan
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.10"
+      - run: python -m pip install clang-format==21.1.8
+      - name: clang-format
+        run: git ls-files -z -- '*.c' '*.h' '*.cpp' '*.hpp' | xargs -0 clang-format --dry-run --Werror
+
+  # The pip and isolated jobs install from this one sdist, which also checks that it is complete; a release attaches it.
+  sdist:
+    needs: plan
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.10"
+      - name: Build the sdist
+        run: |
+          python -m pip install build "twine>=6.1"
+          python -m build --sdist -o dist
+          python -m twine check --strict dist/*.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  presets:
+    needs: plan
+    if: needs.plan.outputs.presets != '[]'
+    name: preset ${{ matrix.preset }}
+    runs-on: ${{ needs.plan.outputs.preset_runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: ${{ fromJSON(needs.plan.outputs.presets) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: ./.github/actions/venv
+        with:
+          python: "3.10"
+          deps: libpinocchio==4.1.0 libcoal==3.0.3 cmeel-urdfdom-headers==3.0.0
+      # setarch -R disables ASLR, which TSan needs on recent kernels; harmless for the other presets.
+      - run: KSTONE_BUILD_ROOT="$RUNNER_TEMP/build" setarch -R scripts/check.sh ${{ matrix.preset }}
+
+  # The exact dependency sets of docs/install.md from pip wheels: the sdist build with C++ tests, then a runtime swap.
+  pip:
+    needs: [plan, sdist]
+    name: pip u${{ matrix.ubuntu }} ${{ matrix.arch }} py${{ matrix.python }} pin${{ matrix.pin }}${{ matrix.swap && format(' +{0}', matrix.swap) || '' }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.pip) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: ./.github/actions/venv
+        with:
+          python: ${{ matrix.python }}
+          deps: ${{ matrix.deps }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: sdist
+          path: dist
+      # One build from the sdist serves the C++ tests, the consumer and the installed package.
+      - name: Build from the sdist with tests, run them and the consumer
+        run: |
+          tar -xzf dist/kstone-*.tar.gz -C "$RUNNER_TEMP"
+          src=$(echo "$RUNNER_TEMP"/kstone-*/)
+          python -m pip install --no-build-isolation --no-deps --config-settings "build-dir=$RUNNER_TEMP/wheel" \
+            --config-settings cmake.define.KSTONE_BUILD_TESTS=ON --config-settings cmake.define.KSTONE_BUILD_TOOLS=ON \
+            --config-settings cmake.define.KSTONE_BUILD_EXAMPLES=ON --config-settings cmake.define.KSTONE_WERROR=ON "$src"
+          ctest --test-dir "$RUNNER_TEMP/wheel" -j"$(nproc)" --output-on-failure --no-tests=error
+          "$src/scripts/consumer.sh" "$RUNNER_TEMP/wheel"
+      - name: Test the installed package
+        run: scripts/test_wheel.sh python
+      - name: Swap a runtime dependency and retest
+        if: matrix.swap
+        env:
+          REQ: ${{ matrix.swap }}
+        run: |
+          python -m pip install "$REQ"
+          python -m pip check
+          { echo "### After installing $REQ"; echo '```'; python -m pip list; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+          scripts/test_wheel.sh python
+          if python -m pip show -q pin; then
+            cd "$RUNNER_TEMP" && python -c "import pinocchio, kstone; r = kstone.doctor(); assert r['ok'], r"
+          fi
+
+  # An isolated build from the sdist, resolving everything from PyPI as an end user would.
+  isolated:
+    needs: [plan, sdist]
+    if: needs.plan.outputs.isolated != '[]'
+    name: isolated u${{ matrix.ubuntu }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.isolated) }}
+    env:
+      PYTHONFAULTHANDLER: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.10"
+      - uses: actions/download-artifact@v8
+        with:
+          name: sdist
+          path: dist
+      - name: Install from the sdist and test
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          PY=$RUNNER_TEMP/venv/bin/python
+          "$PY" -m pip install -v --config-settings=build.verbose=true \
+            --config-settings "build-dir=$RUNNER_TEMP/wheel" dist/kstone-*.tar.gz mypy 2>&1 | tee "$RUNNER_TEMP/pip.log"
+          "$PY" -m pip list
+          scripts/test_wheel.sh "$PY"
+      - name: Diagnostics
+        if: failure()
+        run: |
+          PY=$RUNNER_TEMP/venv/bin/python
+          grep -E "^(Eigen3|Boost|urdfdom|urdfdom_headers|tinyxml2|pinocchio|coal|pybind11|Python)[A-Za-z_]*_(DIR|INCLUDE_DIR|EXECUTABLE):" "$RUNNER_TEMP/wheel/CMakeCache.txt" || true
+          grep -E "isystem|Found " "$RUNNER_TEMP/pip.log" | sort -u | head -100 || true
+          ext=$("$PY" -c 'import kstone._core; print(kstone._core.__file__)') && ldd "$ext"
+          sudo apt-get install -y gdb > /dev/null
+          cd "$RUNNER_TEMP" && KSTONE_TOKEN= gdb -batch -ex run -ex bt -ex "info sharedlibrary" \
+            --args "$PY" "$GITHUB_WORKSPACE/python/tests/test_binding.py" "$GITHUB_WORKSPACE/tests/fixtures"
+
+  # The README C++ recipe: Pinocchio and Coal from source on apt Boost, Eigen and urdfdom.
+  source:
+    needs: plan
+    if: needs.plan.outputs.source != '[]'
+    name: source u${{ matrix.ubuntu }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.source) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - name: Extract the README recipe
+        id: recipe
+        run: |
+          for p in apt deps kstone; do python3 .github/ci/plan.py source-script $p > "$RUNNER_TEMP/$p.sh"; done
+          echo "deps=$(cat "$RUNNER_TEMP/apt.sh" "$RUNNER_TEMP/deps.sh" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+          mkdir "$RUNNER_TEMP/src"
+      - name: apt dependencies
+        working-directory: ${{ runner.temp }}/src
+        run: bash "$RUNNER_TEMP/apt.sh"
+      # Keyed on the Coal and Pinocchio recipe lines, so a version or flag change in the README rebuilds them.
+      - uses: actions/cache/restore@v6
+        id: deps
+        with:
+          path: ~/opt/kstone
+          key: source-deps-${{ matrix.runner }}-${{ steps.recipe.outputs.deps }}
+      - name: Build Coal and Pinocchio
+        if: steps.deps.outputs.cache-hit != 'true'
+        working-directory: ${{ runner.temp }}/src
+        run: bash "$RUNNER_TEMP/deps.sh"
+      - uses: actions/cache/save@v6
+        if: steps.deps.outputs.cache-hit != 'true'
+        with:
+          path: ~/opt/kstone
+          key: ${{ steps.deps.outputs.cache-primary-key }}
+      - name: Build and test kstone
+        working-directory: ${{ runner.temp }}/src
+        run: bash "$RUNNER_TEMP/kstone.sh"
+
+  # Pinocchio and Coal from both ROS apt and pip wheels: colcon must pick ROS, pip install must pick the wheels.
+  ros:
+    needs: plan
+    if: needs.plan.outputs.ros != '[]'
+    name: ros ${{ matrix.distro }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    container: ros:${{ matrix.distro }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.ros) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          path: src/kstone
+      - name: Install dependencies with rosdep
+        run: |
+          apt-get update
+          rosdep update --rosdistro "$ROS_DISTRO"
+          rosdep install --from-paths src --ignore-src -y
+      - name: Also install Pinocchio and Coal from pip in a venv
+        run: |
+          apt-get install -y python3-venv
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install -U pip
+          "$RUNNER_TEMP/venv/bin/python" -m pip install "pin>=4.0.0" "coal>=3.0.3,<3.1" mypy
+          "$RUNNER_TEMP/venv/bin/python" -m pip list
+      - name: colcon build and test
+        run: |
+          source "/opt/ros/$ROS_DISTRO/setup.bash"
+          source "$RUNNER_TEMP/venv/bin/activate"
+          colcon build --event-handlers console_direct+ --cmake-args -DCMAKE_BUILD_TYPE=Release
+          colcon test --event-handlers console_direct+
+          colcon test-result --verbose
+      - name: Check that colcon used the ROS Pinocchio and Coal
+        run: |
+          source install/setup.bash
+          grep -E "^(pinocchio|coal)_DIR:" build/kstone/CMakeCache.txt | tee found.txt
+          test "$(grep -c "=/opt/ros/$ROS_DISTRO/" found.txt)" = 2
+          ldd install/kstone/bin/kstone | grep -E "pinocchio|coal" | tee libs.txt
+          grep -q "/opt/ros/$ROS_DISTRO/" libs.txt
+          if grep -q cmeel libs.txt; then exit 1; fi
+      - name: Build a downstream project against the install space
+        run: |
+          source install/setup.bash
+          source "$RUNNER_TEMP/venv/bin/activate"
+          cmake -S src/kstone/tests/consumer -B build/consumer -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/consumer
+          build/consumer/consumer src/kstone/tests/fixtures/arm.urdf
+      - name: pip install with ROS sourced, check that it used the pip wheels
+        run: |
+          source "/opt/ros/$ROS_DISTRO/setup.bash"
+          source "$RUNNER_TEMP/venv/bin/activate"
+          python -m pip install --config-settings "build-dir=$RUNNER_TEMP/wheel" ./src/kstone
+          grep -E "^(pinocchio|coal)_DIR:" "$RUNNER_TEMP/wheel/CMakeCache.txt" | tee found.txt
+          test "$(grep -c cmeel.prefix found.txt)" = 2
+          if grep -q /opt/ros found.txt; then exit 1; fi
+          ext=$(cd "$RUNNER_TEMP" && python -c 'import kstone._core; print(kstone._core.__file__)')
+          ldd "$ext" | grep -E "pinocchio|coal" | tee libs.txt
+          grep -q cmeel.prefix libs.txt
+          if grep -q /opt/ros libs.txt; then exit 1; fi
+          (cd "$RUNNER_TEMP" && python -c 'import kstone._core; print(open("/proc/self/maps").read())') \
+            | grep -oE "/\S*lib(pinocchio|coal)\S*" | sort -u | tee maps.txt
+          grep -q cmeel.prefix maps.txt
+          if grep -q /opt/ros maps.txt; then exit 1; fi
+          cd "$RUNNER_TEMP" && python -c "import kstone; r = kstone.doctor(print=True); assert r['ok'], r"
+          KSTONE_TOKEN= python "$GITHUB_WORKSPACE/src/kstone/python/tests/test_binding.py" "$GITHUB_WORKSPACE/src/kstone/tests/fixtures"
+
+  release:
+    needs: [plan, format, sdist, presets, pip, isolated, ros, source]
+    if: >-
+      !cancelled() && needs.plan.outputs.tag != '' && needs.sdist.result == 'success'
+      && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.plan.outputs.tag }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: sdist
+          path: dist
+      - name: Release notes from the changelog
+        run: |
+          awk -v v="## $VERSION" '$0 == v {on = 1; next} on && /^## / {exit} on' CHANGELOG.md > notes.md
+          test -s notes.md
+          ls -l dist
+      - name: Tag and create the draft release
+        run: |
+          git tag "$TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
+          gh release create "$TAG" dist/* --draft --verify-tag --title "kstone $VERSION" --notes-file notes.md

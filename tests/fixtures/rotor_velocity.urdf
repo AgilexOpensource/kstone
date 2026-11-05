@@ -1,0 +1,10 @@
+<robot name="rotor_velocity">
+  <link name="base"/>
+  <link name="tip"/>
+  <joint name="yaw" type="revolute">
+    <parent link="base"/>
+    <child link="tip"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1" upper="1" velocity="2" effort="100"/>
+  </joint>
+</robot>

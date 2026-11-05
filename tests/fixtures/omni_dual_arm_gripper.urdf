@@ -1,0 +1,944 @@
+<?xml version="1.0"?>
+<robot name="omni_dual_arm_gripper">
+  <material name="gray">
+    <color rgba="0.45 0.45 0.48 1" />
+  </material>
+  <material name="blue">
+    <color rgba="0.20 0.45 0.85 1" />
+  </material>
+  <material name="blue_dark">
+    <color rgba="0.12 0.28 0.55 1" />
+  </material>
+  <material name="orange">
+    <color rgba="0.95 0.55 0.15 1" />
+  </material>
+  <material name="green">
+    <color rgba="0.35 0.75 0.35 1" />
+  </material>
+  <material name="dark">
+    <color rgba="0.20 0.20 0.22 1" />
+  </material>
+  <material name="silver">
+    <color rgba="0.75 0.75 0.78 1" />
+  </material>
+  <material name="body_blue">
+    <color rgba="0.16 0.38 0.70 1" />
+  </material>
+  <material name="wheel_dark">
+    <color rgba="0.08 0.08 0.10 1" />
+  </material>
+  <!-- base_link is the root; load with RootJoint::free_flyer for an omni base. -->
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0.12" rpy="0 0 0" />
+      <geometry>
+        <box size="0.44 0.44 0.10" />
+      </geometry>
+      <material name="body_blue" />
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.12" rpy="0 0 0" />
+      <geometry>
+        <box size="0.44 0.44 0.10" />
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0.12" rpy="0 0 0" />
+      <mass value="51.68" />
+      <inertia ixx="0.871" ixy="0" ixz="0" iyy="0.871" iyz="0" izz="1.669" />
+    </inertial>
+  </link>
+  <link name="wheel_link_1">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="0.56" />
+      <inertia ixx="0.00097" ixy="0" ixz="0" iyy="0.00097" iyz="0" izz="0.00179" />
+    </inertial>
+    <visual>
+      <geometry>
+        <cylinder radius="0.08" length="0.04" />
+      </geometry>
+      <material name="wheel_dark" />
+    </visual>
+    <collision>
+      <geometry>
+        <cylinder radius="0.08" length="0.04" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="wheel_joint_1" type="continuous">
+    <parent link="base_link" />
+    <child link="wheel_link_1" />
+    <origin xyz="0.216 -0.216 0.08" rpy="2.35619 -1.5708 0" />
+    <axis xyz="0 0 1" />
+  </joint>
+  <link name="wheel_link_2">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="0.56" />
+      <inertia ixx="0.00097" ixy="0" ixz="0" iyy="0.00097" iyz="0" izz="0.00179" />
+    </inertial>
+    <visual>
+      <geometry>
+        <cylinder radius="0.08" length="0.04" />
+      </geometry>
+      <material name="wheel_dark" />
+    </visual>
+    <collision>
+      <geometry>
+        <cylinder radius="0.08" length="0.04" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="wheel_joint_2" type="continuous">
+    <parent link="base_link" />
+    <child link="wheel_link_2" />
+    <origin xyz="0.216 0.216 0.08" rpy="-2.35619 -1.5708 0" />
+    <axis xyz="0 0 1" />
+  </joint>
+  <link name="wheel_link_3">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="0.56" />
+      <inertia ixx="0.00097" ixy="0" ixz="0" iyy="0.00097" iyz="0" izz="0.00179" />
+    </inertial>
+    <visual>
+      <geometry>
+        <cylinder radius="0.08" length="0.04" />
+      </geometry>
+      <material name="wheel_dark" />
+    </visual>
+    <collision>
+      <geometry>
+        <cylinder radius="0.08" length="0.04" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="wheel_joint_3" type="continuous">
+    <parent link="base_link" />
+    <child link="wheel_link_3" />
+    <origin xyz="-0.216 -0.211 0.08" rpy="0.785398 -1.5708 0" />
+    <axis xyz="0 0 1" />
+  </joint>
+  <link name="wheel_link_4">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="0.56" />
+      <inertia ixx="0.00097" ixy="0" ixz="0" iyy="0.00097" iyz="0" izz="0.00179" />
+    </inertial>
+    <visual>
+      <geometry>
+        <cylinder radius="0.08" length="0.04" />
+      </geometry>
+      <material name="wheel_dark" />
+    </visual>
+    <collision>
+      <geometry>
+        <cylinder radius="0.08" length="0.04" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="wheel_joint_4" type="continuous">
+    <parent link="base_link" />
+    <child link="wheel_link_4" />
+    <origin xyz="-0.216 0.211 0.08" rpy="-0.785398 -1.5708 0" />
+    <axis xyz="0 0 1" />
+  </joint>
+  <link name="torso_link_1">
+    <visual>
+      <origin xyz="0.20 0 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.40 0.12 0.12" />
+      </geometry>
+      <material name="blue" />
+    </visual>
+    <collision>
+      <origin xyz="0.20 0 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.40 0.12 0.12" />
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0.20 0 0" rpy="0 0 0" />
+      <mass value="6" />
+      <inertia ixx="0.014" ixy="0" ixz="0" iyy="0.087" iyz="0" izz="0.087" />
+    </inertial>
+  </link>
+  <joint name="torso_joint_1" type="revolute">
+    <parent link="base_link" />
+    <child link="torso_link_1" />
+    <origin xyz="0 0 0.12" rpy="-1.5707963267948966 -1.5707963267948966 0" />
+    <axis xyz="0 0 1" />
+    <limit lower="-1.5707963267948966" upper="1.3962634015954636" effort="200" velocity="3.0" />
+  </joint>
+  <link name="torso_link_2">
+    <visual>
+      <origin xyz="0.165 0 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.33 0.10 0.10" />
+      </geometry>
+      <material name="blue" />
+    </visual>
+    <collision>
+      <origin xyz="0.165 0 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.33 0.10 0.10" />
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0.165 0 0" rpy="0 0 0" />
+      <mass value="4" />
+      <inertia ixx="0.0067" ixy="0" ixz="0" iyy="0.040" iyz="0" izz="0.040" />
+    </inertial>
+  </link>
+  <joint name="torso_joint_2" type="revolute">
+    <parent link="torso_link_1" />
+    <child link="torso_link_2" />
+    <origin xyz="0.40 0 0" rpy="0 0 0" />
+    <axis xyz="0 0 1" />
+    <limit lower="0.0" upper="2.617993877991494" effort="200" velocity="3.0" />
+  </joint>
+  <link name="torso_link_3">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.12 0.12 0.16" />
+      </geometry>
+      <material name="blue_dark" />
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.12 0.12 0.16" />
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="3" />
+      <inertia ixx="0.010" ixy="0" ixz="0" iyy="0.010" iyz="0" izz="0.0072" />
+    </inertial>
+  </link>
+  <joint name="torso_joint_3" type="revolute">
+    <parent link="torso_link_2" />
+    <child link="torso_link_3" />
+    <origin xyz="0.33 0 0" rpy="0 0 1.5707963267948966" />
+    <axis xyz="0 0 1" />
+    <limit lower="-1.5707963267948966" upper="1.5707963267948966" effort="200" velocity="3.0" />
+  </joint>
+  <link name="torso_link_4">
+    <visual>
+      <origin xyz="0 0 0.06" rpy="0 0 0" />
+      <geometry>
+        <cylinder radius="0.10" length="0.12" />
+      </geometry>
+      <material name="blue_dark" />
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.06" rpy="0 0 0" />
+      <geometry>
+        <cylinder radius="0.10" length="0.12" />
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0.06" rpy="0 0 0" />
+      <mass value="4" />
+      <inertia ixx="0.015" ixy="0" ixz="0" iyy="0.015" iyz="0" izz="0.020" />
+    </inertial>
+  </link>
+  <joint name="torso_joint_4" type="revolute">
+    <parent link="torso_link_3" />
+    <child link="torso_link_4" />
+    <origin xyz="0 -0.1645 0" rpy="1.5707963267948966 0 0" />
+    <axis xyz="0 0 1" />
+    <limit lower="-1.5707963267948966" upper="1.5707963267948966" effort="100" velocity="3.0" />
+  </joint>
+  <link name="head_base_link">
+    <visual>
+      <geometry>
+        <box size="0.10 0.08 0.06" />
+      </geometry>
+      <material name="gray" />
+    </visual>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="0.26" />
+      <inertia ixx="0.00022" ixy="0" ixz="0" iyy="0.00030" iyz="0" izz="0.00036" />
+    </inertial>
+    <collision>
+      <geometry>
+        <box size="0.10 0.08 0.06" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="head_base_fixed" type="fixed">
+    <parent link="torso_link_4" />
+    <child link="head_base_link" />
+    <origin xyz="0.0105 0 0.1321" rpy="0 0 0" />
+  </joint>
+  <link name="head_pitch_link">
+    <visual>
+      <origin xyz="0 -0.04 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.08 0.06" />
+      </geometry>
+      <material name="gray" />
+    </visual>
+    <inertial>
+      <origin xyz="0 -0.04 0" rpy="0 0 0" />
+      <mass value="0.25" />
+      <inertia ixx="0.00021" ixy="0" ixz="0" iyy="0.00021" iyz="0" izz="0.00027" />
+    </inertial>
+    <collision>
+      <origin xyz="0 -0.04 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.08 0.06" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="head_pitch_joint" type="revolute">
+    <parent link="head_base_link" />
+    <child link="head_pitch_link" />
+    <origin xyz="0 0 0" rpy="-1.5707963267948966 0 0" />
+    <axis xyz="0 0 1" />
+    <limit lower="-0.75" upper="1.0472" effort="50" velocity="3.0" />
+  </joint>
+  <link name="head_yaw_link">
+    <visual>
+      <origin xyz="0.04 0 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.06 0.06" />
+      </geometry>
+      <material name="gray" />
+    </visual>
+    <inertial>
+      <origin xyz="0.04 0 0" rpy="0 0 0" />
+      <mass value="0.26" />
+      <inertia ixx="0.00016" ixy="0" ixz="0" iyy="0.00022" iyz="0" izz="0.00022" />
+    </inertial>
+    <collision>
+      <origin xyz="0.04 0 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.06 0.06" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="head_yaw_joint" type="revolute">
+    <parent link="head_pitch_link" />
+    <child link="head_yaw_link" />
+    <origin xyz="0 -0.06924 0" rpy="1.5707963267948966 0 0" />
+    <axis xyz="0 0 1" />
+    <limit lower="-1.5708" upper="1.5708" effort="50" velocity="3.0" />
+  </joint>
+  <link name="left_arm_base">
+    <visual>
+      <geometry>
+        <cylinder radius="0.06" length="0.10" />
+      </geometry>
+      <material name="orange" />
+    </visual>
+    <inertial>
+      <mass value="1.0" />
+      <inertia ixx="0.0017" ixy="0" ixz="0" iyy="0.0017" iyz="0" izz="0.0018" />
+    </inertial>
+    <collision>
+      <geometry>
+        <cylinder radius="0.06" length="0.10" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="left_arm_mount" type="fixed">
+    <parent link="torso_link_4" />
+    <child link="left_arm_base" />
+    <origin xyz="0 0.04 0.101" rpy="-1.5707963267948966 -1.5707963267948966 0" />
+  </joint>
+  <link name="left_arm_link_1">
+    <visual>
+      <origin xyz="0 0 0.07" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.08 0.14" />
+      </geometry>
+      <material name="orange" />
+    </visual>
+    <inertial>
+      <origin xyz="0 0 0.07" rpy="0 0 0" />
+      <mass value="0.8" />
+      <inertia ixx="0.0017" ixy="0" ixz="0" iyy="0.0017" iyz="0" izz="0.00085" />
+    </inertial>
+    <collision>
+      <origin xyz="0 0 0.07" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.08 0.14" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="left_arm_joint_1" type="revolute">
+    <origin xyz="0 0 0.138" rpy="0 0 0" />
+    <parent link="left_arm_base" />
+    <child link="left_arm_link_1" />
+    <axis xyz="0 0 1" />
+    <limit lower="-2.70526" upper="2.70526" effort="100" velocity="3" />
+  </joint>
+  <link name="left_arm_link_2">
+    <visual>
+      <origin xyz="0 -0.155 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.07 0.31 0.07" />
+      </geometry>
+      <material name="orange" />
+    </visual>
+    <inertial>
+      <origin xyz="0 -0.155 0" rpy="0 0 0" />
+      <mass value="0.7" />
+      <inertia ixx="0.0059" ixy="0" ixz="0" iyy="0.00057" iyz="0" izz="0.0059" />
+    </inertial>
+    <collision>
+      <origin xyz="0 -0.155 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.07 0.31 0.07" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="left_arm_joint_2" type="revolute">
+    <origin xyz="0 0 0" rpy="1.5707963 3.1415926 0" />
+    <parent link="left_arm_link_1" />
+    <child link="left_arm_link_2" />
+    <axis xyz="0 0 1" />
+    <limit lower="-1.74" upper="1.74" effort="100" velocity="3" />
+  </joint>
+  <link name="left_arm_link_3">
+    <visual>
+      <origin xyz="0 0 -0.05" rpy="0 0 0" />
+      <geometry>
+        <box size="0.07 0.07 0.10" />
+      </geometry>
+      <material name="orange" />
+    </visual>
+    <inertial>
+      <origin xyz="0 0 -0.05" rpy="0 0 0" />
+      <mass value="0.7" />
+      <inertia ixx="0.00087" ixy="0" ixz="0" iyy="0.00087" iyz="0" izz="0.00057" />
+    </inertial>
+    <collision>
+      <origin xyz="0 0 -0.05" rpy="0 0 0" />
+      <geometry>
+        <box size="0.07 0.07 0.10" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="left_arm_joint_3" type="revolute">
+    <origin xyz="0 -0.31 0" rpy="-1.5707963 0 3.1415926926" />
+    <parent link="left_arm_link_2" />
+    <child link="left_arm_link_3" />
+    <axis xyz="0 0 1" />
+    <limit lower="-2.75" upper="2.75" effort="100" velocity="3" />
+  </joint>
+  <link name="left_arm_link_4">
+    <visual>
+      <origin xyz="0 -0.135 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.06 0.27 0.06" />
+      </geometry>
+      <material name="orange" />
+    </visual>
+    <inertial>
+      <origin xyz="0 -0.135 0" rpy="0 0 0" />
+      <mass value="0.5" />
+      <inertia ixx="0.0032" ixy="0" ixz="0" iyy="0.00030" iyz="0" izz="0.0032" />
+    </inertial>
+    <collision>
+      <origin xyz="0 -0.135 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.06 0.27 0.06" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="left_arm_joint_4" type="revolute">
+    <origin xyz="0 0 0" rpy="-1.5707963 0 3.1415926926" />
+    <parent link="left_arm_link_3" />
+    <child link="left_arm_link_4" />
+    <axis xyz="0 0 1" />
+    <limit lower="0.0" upper="2.14" effort="100" velocity="3" />
+  </joint>
+  <link name="left_arm_link_5">
+    <visual>
+      <origin xyz="0 0 -0.06" rpy="0 0 0" />
+      <geometry>
+        <box size="0.06 0.06 0.12" />
+      </geometry>
+      <material name="orange" />
+    </visual>
+    <inertial>
+      <origin xyz="0 0 -0.06" rpy="0 0 0" />
+      <mass value="0.6" />
+      <inertia ixx="0.00090" ixy="0" ixz="0" iyy="0.00090" iyz="0" izz="0.00036" />
+    </inertial>
+    <collision>
+      <origin xyz="0 0 -0.06" rpy="0 0 0" />
+      <geometry>
+        <box size="0.06 0.06 0.12" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="left_arm_joint_5" type="revolute">
+    <origin xyz="0 -0.27001 0" rpy="1.5707963 -1.5707963 0" />
+    <parent link="left_arm_link_4" />
+    <child link="left_arm_link_5" />
+    <axis xyz="0 0 1" />
+    <limit lower="-2.75" upper="2.75" effort="100" velocity="3" />
+  </joint>
+  <link name="left_arm_link_6">
+    <visual>
+      <geometry>
+        <box size="0.05 0.05 0.05" />
+      </geometry>
+      <material name="orange" />
+    </visual>
+    <inertial>
+      <mass value="0.3" />
+      <inertia ixx="0.00013" ixy="0" ixz="0" iyy="0.00013" iyz="0" izz="0.00013" />
+    </inertial>
+    <collision>
+      <geometry>
+        <box size="0.05 0.05 0.05" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="left_arm_joint_6" type="revolute">
+    <origin xyz="0 0 0" rpy="1.5707963 -1.5707963 0" />
+    <parent link="left_arm_link_5" />
+    <child link="left_arm_link_6" />
+    <axis xyz="0 0 1" />
+    <limit lower="-0.73" upper="0.95" effort="100" velocity="3" />
+  </joint>
+  <link name="left_arm_link_7">
+    <visual>
+      <geometry>
+        <box size="0.04 0.04 0.04" />
+      </geometry>
+      <material name="orange" />
+    </visual>
+    <inertial>
+      <mass value="0.01" />
+      <inertia ixx="0.0000013" ixy="0" ixz="0" iyy="0.0000013" iyz="0" izz="0.0000013" />
+    </inertial>
+    <collision>
+      <geometry>
+        <box size="0.04 0.04 0.04" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="left_arm_joint_7" type="revolute">
+    <origin xyz="0 -0.0235 0" rpy="1.5707963 0 0" />
+    <parent link="left_arm_link_6" />
+    <child link="left_arm_link_7" />
+    <axis xyz="0 0 1" />
+    <limit lower="-1.5707963" upper="1.5707963" effort="100" velocity="3" />
+  </joint>
+  <link name="left_gripper_mount" />
+  <joint name="left_gripper_mount_joint" type="fixed">
+    <origin xyz="0.032 0 -0.0235" rpy="-1.5708 0 -1.5708" />
+    <parent link="left_arm_link_7" />
+    <child link="left_gripper_mount" />
+  </joint>
+  <link name="left_gripper_base">
+    <visual>
+      <origin xyz="0 0 0.04" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.10 0.08" />
+      </geometry>
+      <material name="dark" />
+    </visual>
+    <inertial>
+      <origin xyz="0 0 0.04" rpy="0 0 0" />
+      <mass value="0.45" />
+      <inertia ixx="0.00062" ixy="0" ixz="0" iyy="0.00048" iyz="0" izz="0.00062" />
+    </inertial>
+    <collision>
+      <origin xyz="0 0 0.04" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.10 0.08" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="left_gripper_base_joint" type="fixed">
+    <origin xyz="0 0 0.006" rpy="0 0 0" />
+    <parent link="left_gripper_mount" />
+    <child link="left_gripper_base" />
+  </joint>
+  <link name="left_gripper_slider" />
+  <joint name="left_gripper_joint" type="prismatic">
+    <origin xyz="0 0 0" rpy="0 0 0" />
+    <parent link="left_gripper_base" />
+    <child link="left_gripper_slider" />
+    <axis xyz="0 0 1" />
+    <limit lower="0" upper="0.1" effort="10" velocity="3" />
+  </joint>
+  <link name="left_gripper_finger_1">
+    <visual>
+      <origin xyz="0 0 0.025" rpy="0 0 0" />
+      <geometry>
+        <box size="0.015 0.04 0.05" />
+      </geometry>
+      <material name="silver" />
+    </visual>
+    <inertial>
+      <origin xyz="0 0 0.025" rpy="0 0 0" />
+      <mass value="0.025" />
+      <inertia ixx="0.0000085" ixy="0" ixz="0" iyy="0.0000057" iyz="0" izz="0.0000038" />
+    </inertial>
+    <collision>
+      <origin xyz="0 0 0.025" rpy="0 0 0" />
+      <geometry>
+        <box size="0.015 0.04 0.05" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="left_gripper_finger_joint_1" type="prismatic">
+    <origin xyz="0 0 0.138" rpy="1.5707963 0 3.1415926" />
+    <parent link="left_gripper_base" />
+    <child link="left_gripper_finger_1" />
+    <axis xyz="0 0 1" />
+    <limit lower="0" upper="0.05" effort="10" velocity="3" />
+    <mimic joint="left_gripper_joint" multiplier="0.5" offset="0.0" />
+  </joint>
+  <link name="left_gripper_finger_2">
+    <visual>
+      <origin xyz="0 0 0.025" rpy="0 0 0" />
+      <geometry>
+        <box size="0.015 0.04 0.05" />
+      </geometry>
+      <material name="silver" />
+    </visual>
+    <inertial>
+      <origin xyz="0 0 0.025" rpy="0 0 0" />
+      <mass value="0.025" />
+      <inertia ixx="0.0000085" ixy="0" ixz="0" iyy="0.0000057" iyz="0" izz="0.0000038" />
+    </inertial>
+    <collision>
+      <origin xyz="0 0 0.025" rpy="0 0 0" />
+      <geometry>
+        <box size="0.015 0.04 0.05" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="left_gripper_finger_joint_2" type="prismatic">
+    <origin xyz="0 0 0.138" rpy="1.5707963 0 0" />
+    <parent link="left_gripper_base" />
+    <child link="left_gripper_finger_2" />
+    <axis xyz="0 0 -1" />
+    <limit lower="-0.05" upper="0" effort="10" velocity="3" />
+    <mimic joint="left_gripper_joint" multiplier="-0.5" offset="0.0" />
+  </joint>
+  <link name="left_tool_frame" />
+  <joint name="left_tool_frame_joint" type="fixed">
+    <origin xyz="0 0 0.138" rpy="0 0 0" />
+    <parent link="left_gripper_base" />
+    <child link="left_tool_frame" />
+  </joint>
+  <link name="right_arm_base">
+    <visual>
+      <geometry>
+        <cylinder radius="0.06" length="0.10" />
+      </geometry>
+      <material name="green" />
+    </visual>
+    <inertial>
+      <mass value="1.0" />
+      <inertia ixx="0.0017" ixy="0" ixz="0" iyy="0.0017" iyz="0" izz="0.0018" />
+    </inertial>
+    <collision>
+      <geometry>
+        <cylinder radius="0.06" length="0.10" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="right_arm_mount" type="fixed">
+    <parent link="torso_link_4" />
+    <child link="right_arm_base" />
+    <origin xyz="0 -0.04 0.101" rpy="1.5707963267948966 -1.5707963267948966 0" />
+  </joint>
+  <link name="right_arm_link_1">
+    <visual>
+      <origin xyz="0 0 0.07" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.08 0.14" />
+      </geometry>
+      <material name="green" />
+    </visual>
+    <inertial>
+      <origin xyz="0 0 0.07" rpy="0 0 0" />
+      <mass value="0.8" />
+      <inertia ixx="0.0017" ixy="0" ixz="0" iyy="0.0017" iyz="0" izz="0.00085" />
+    </inertial>
+    <collision>
+      <origin xyz="0 0 0.07" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.08 0.14" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="right_arm_joint_1" type="revolute">
+    <origin xyz="0 0 0.138" rpy="0 0 0" />
+    <parent link="right_arm_base" />
+    <child link="right_arm_link_1" />
+    <axis xyz="0 0 1" />
+    <limit lower="-2.70526" upper="2.70526" effort="100" velocity="3" />
+  </joint>
+  <link name="right_arm_link_2">
+    <visual>
+      <origin xyz="0 -0.155 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.07 0.31 0.07" />
+      </geometry>
+      <material name="green" />
+    </visual>
+    <inertial>
+      <origin xyz="0 -0.155 0" rpy="0 0 0" />
+      <mass value="0.7" />
+      <inertia ixx="0.0059" ixy="0" ixz="0" iyy="0.00057" iyz="0" izz="0.0059" />
+    </inertial>
+    <collision>
+      <origin xyz="0 -0.155 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.07 0.31 0.07" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="right_arm_joint_2" type="revolute">
+    <origin xyz="0 0 0" rpy="1.5707963 3.1415926 0" />
+    <parent link="right_arm_link_1" />
+    <child link="right_arm_link_2" />
+    <axis xyz="0 0 1" />
+    <limit lower="-1.74" upper="1.74" effort="100" velocity="3" />
+  </joint>
+  <link name="right_arm_link_3">
+    <visual>
+      <origin xyz="0 0 -0.05" rpy="0 0 0" />
+      <geometry>
+        <box size="0.07 0.07 0.10" />
+      </geometry>
+      <material name="green" />
+    </visual>
+    <inertial>
+      <origin xyz="0 0 -0.05" rpy="0 0 0" />
+      <mass value="0.7" />
+      <inertia ixx="0.00087" ixy="0" ixz="0" iyy="0.00087" iyz="0" izz="0.00057" />
+    </inertial>
+    <collision>
+      <origin xyz="0 0 -0.05" rpy="0 0 0" />
+      <geometry>
+        <box size="0.07 0.07 0.10" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="right_arm_joint_3" type="revolute">
+    <origin xyz="0 -0.31 0" rpy="-1.5707963 0 3.1415926926" />
+    <parent link="right_arm_link_2" />
+    <child link="right_arm_link_3" />
+    <axis xyz="0 0 1" />
+    <limit lower="-2.75" upper="2.75" effort="100" velocity="3" />
+  </joint>
+  <link name="right_arm_link_4">
+    <visual>
+      <origin xyz="0 -0.135 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.06 0.27 0.06" />
+      </geometry>
+      <material name="green" />
+    </visual>
+    <inertial>
+      <origin xyz="0 -0.135 0" rpy="0 0 0" />
+      <mass value="0.5" />
+      <inertia ixx="0.0032" ixy="0" ixz="0" iyy="0.00030" iyz="0" izz="0.0032" />
+    </inertial>
+    <collision>
+      <origin xyz="0 -0.135 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.06 0.27 0.06" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="right_arm_joint_4" type="revolute">
+    <origin xyz="0 0 0" rpy="-1.5707963 0 3.1415926926" />
+    <parent link="right_arm_link_3" />
+    <child link="right_arm_link_4" />
+    <axis xyz="0 0 1" />
+    <limit lower="0.0" upper="2.14" effort="100" velocity="3" />
+  </joint>
+  <link name="right_arm_link_5">
+    <visual>
+      <origin xyz="0 0 -0.06" rpy="0 0 0" />
+      <geometry>
+        <box size="0.06 0.06 0.12" />
+      </geometry>
+      <material name="green" />
+    </visual>
+    <inertial>
+      <origin xyz="0 0 -0.06" rpy="0 0 0" />
+      <mass value="0.6" />
+      <inertia ixx="0.00090" ixy="0" ixz="0" iyy="0.00090" iyz="0" izz="0.00036" />
+    </inertial>
+    <collision>
+      <origin xyz="0 0 -0.06" rpy="0 0 0" />
+      <geometry>
+        <box size="0.06 0.06 0.12" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="right_arm_joint_5" type="revolute">
+    <origin xyz="0 -0.27001 0" rpy="1.5707963 -1.5707963 0" />
+    <parent link="right_arm_link_4" />
+    <child link="right_arm_link_5" />
+    <axis xyz="0 0 1" />
+    <limit lower="-2.75" upper="2.75" effort="100" velocity="3" />
+  </joint>
+  <link name="right_arm_link_6">
+    <visual>
+      <geometry>
+        <box size="0.05 0.05 0.05" />
+      </geometry>
+      <material name="green" />
+    </visual>
+    <inertial>
+      <mass value="0.3" />
+      <inertia ixx="0.00013" ixy="0" ixz="0" iyy="0.00013" iyz="0" izz="0.00013" />
+    </inertial>
+    <collision>
+      <geometry>
+        <box size="0.05 0.05 0.05" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="right_arm_joint_6" type="revolute">
+    <origin xyz="0 0 0" rpy="1.5707963 -1.5707963 0" />
+    <parent link="right_arm_link_5" />
+    <child link="right_arm_link_6" />
+    <axis xyz="0 0 1" />
+    <limit lower="-0.73" upper="0.95" effort="100" velocity="3" />
+  </joint>
+  <link name="right_arm_link_7">
+    <visual>
+      <geometry>
+        <box size="0.04 0.04 0.04" />
+      </geometry>
+      <material name="green" />
+    </visual>
+    <inertial>
+      <mass value="0.01" />
+      <inertia ixx="0.0000013" ixy="0" ixz="0" iyy="0.0000013" iyz="0" izz="0.0000013" />
+    </inertial>
+    <collision>
+      <geometry>
+        <box size="0.04 0.04 0.04" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="right_arm_joint_7" type="revolute">
+    <origin xyz="0 -0.0235 0" rpy="1.5707963 0 0" />
+    <parent link="right_arm_link_6" />
+    <child link="right_arm_link_7" />
+    <axis xyz="0 0 1" />
+    <limit lower="-1.5707963" upper="1.5707963" effort="100" velocity="3" />
+  </joint>
+  <link name="right_gripper_mount" />
+  <joint name="right_gripper_mount_joint" type="fixed">
+    <origin xyz="0.032 0 -0.0235" rpy="-1.5708 0 -1.5708" />
+    <parent link="right_arm_link_7" />
+    <child link="right_gripper_mount" />
+  </joint>
+  <link name="right_gripper_base">
+    <visual>
+      <origin xyz="0 0 0.04" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.10 0.08" />
+      </geometry>
+      <material name="dark" />
+    </visual>
+    <inertial>
+      <origin xyz="0 0 0.04" rpy="0 0 0" />
+      <mass value="0.45" />
+      <inertia ixx="0.00062" ixy="0" ixz="0" iyy="0.00048" iyz="0" izz="0.00062" />
+    </inertial>
+    <collision>
+      <origin xyz="0 0 0.04" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.10 0.08" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="right_gripper_base_joint" type="fixed">
+    <origin xyz="0 0 0.006" rpy="0 0 0" />
+    <parent link="right_gripper_mount" />
+    <child link="right_gripper_base" />
+  </joint>
+  <link name="right_gripper_slider" />
+  <joint name="right_gripper_joint" type="prismatic">
+    <origin xyz="0 0 0" rpy="0 0 0" />
+    <parent link="right_gripper_base" />
+    <child link="right_gripper_slider" />
+    <axis xyz="0 0 1" />
+    <limit lower="0" upper="0.1" effort="10" velocity="3" />
+  </joint>
+  <link name="right_gripper_finger_1">
+    <visual>
+      <origin xyz="0 0 0.025" rpy="0 0 0" />
+      <geometry>
+        <box size="0.015 0.04 0.05" />
+      </geometry>
+      <material name="silver" />
+    </visual>
+    <inertial>
+      <origin xyz="0 0 0.025" rpy="0 0 0" />
+      <mass value="0.025" />
+      <inertia ixx="0.0000085" ixy="0" ixz="0" iyy="0.0000057" iyz="0" izz="0.0000038" />
+    </inertial>
+    <collision>
+      <origin xyz="0 0 0.025" rpy="0 0 0" />
+      <geometry>
+        <box size="0.015 0.04 0.05" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="right_gripper_finger_joint_1" type="prismatic">
+    <origin xyz="0 0 0.138" rpy="1.5707963 0 3.1415926" />
+    <parent link="right_gripper_base" />
+    <child link="right_gripper_finger_1" />
+    <axis xyz="0 0 1" />
+    <limit lower="0" upper="0.05" effort="10" velocity="3" />
+    <mimic joint="right_gripper_joint" multiplier="0.5" offset="0.0" />
+  </joint>
+  <link name="right_gripper_finger_2">
+    <visual>
+      <origin xyz="0 0 0.025" rpy="0 0 0" />
+      <geometry>
+        <box size="0.015 0.04 0.05" />
+      </geometry>
+      <material name="silver" />
+    </visual>
+    <inertial>
+      <origin xyz="0 0 0.025" rpy="0 0 0" />
+      <mass value="0.025" />
+      <inertia ixx="0.0000085" ixy="0" ixz="0" iyy="0.0000057" iyz="0" izz="0.0000038" />
+    </inertial>
+    <collision>
+      <origin xyz="0 0 0.025" rpy="0 0 0" />
+      <geometry>
+        <box size="0.015 0.04 0.05" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="right_gripper_finger_joint_2" type="prismatic">
+    <origin xyz="0 0 0.138" rpy="1.5707963 0 0" />
+    <parent link="right_gripper_base" />
+    <child link="right_gripper_finger_2" />
+    <axis xyz="0 0 -1" />
+    <limit lower="-0.05" upper="0" effort="10" velocity="3" />
+    <mimic joint="right_gripper_joint" multiplier="-0.5" offset="0.0" />
+  </joint>
+  <link name="right_tool_frame" />
+  <joint name="right_tool_frame_joint" type="fixed">
+    <origin xyz="0 0 0.138" rpy="0 0 0" />
+    <parent link="right_gripper_base" />
+    <child link="right_tool_frame" />
+  </joint>
+</robot>

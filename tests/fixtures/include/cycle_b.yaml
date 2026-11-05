@@ -1,0 +1,2 @@
+b: 2
+next: !include cycle_a.yaml

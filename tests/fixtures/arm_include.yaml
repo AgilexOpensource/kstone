@@ -1,0 +1,8 @@
+# arm_loopback.yaml split with !include and ${vars}; exercised by unit and CLI tests.
+model:
+  file: arm.urdf
+rate_hz: ${RATE:-100}
+realtime: false
+robot:
+  type: loopback
+modules: !include include/modules.yaml

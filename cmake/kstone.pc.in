@@ -1,0 +1,10 @@
+prefix=@CMAKE_INSTALL_PREFIX@
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: kstone
+Description: Robot motion control library
+Version: @PROJECT_VERSION@
+Requires: eigen3
+Libs: -L${libdir} -lkstone
+Cflags: -I${includedir}
