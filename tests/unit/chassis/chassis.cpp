@@ -52,10 +52,10 @@ TEST_CASE("chassis: velocity mode limits and lease timeout") {
         now += 0.01;
         REQUIRE(ctrl.submit_velocity({1.0, 1.0, 2.0}, now));
         out = ctrl.step(now);
-        REQUIRE(std::hypot(out.velocity.vx, out.velocity.vy) <= config.max_linear + 1e-12);
-        REQUIRE(std::abs(out.velocity.wz) <= config.max_angular + 1e-12);
+        REQUIRE(std::hypot(out.velocity.vx, out.velocity.vy) <= config.max_linear_velocity + 1e-12);
+        REQUIRE(std::abs(out.velocity.wz) <= config.max_angular_velocity + 1e-12);
     }
-    CHECK(std::abs(out.velocity.vx - config.max_linear) < 1e-9);
+    CHECK(std::abs(out.velocity.vx - config.max_linear_velocity) < 1e-9);
     ctrl.step(now + 0.01);
     now += 0.01;
     out = ctrl.service(now + 0.3, true);
@@ -118,8 +118,8 @@ TEST_CASE("chassis: omni pose mode is bounded and reaches the goal") {
             REQUIRE(out.reason == ChassisReason::tracking);
             const double dvx = out.velocity.vx - previous.vx;
             const double dvy = out.velocity.vy - previous.vy;
-            REQUIRE(std::hypot(out.velocity.vx, out.velocity.vy) <= limits.linear_velocity + 1e-9);
-            REQUIRE(std::hypot(dvx, dvy) <= limits.linear_acceleration * dt * 1.2 + 1e-9);
+            REQUIRE(std::hypot(out.velocity.vx, out.velocity.vy) <= limits.max_linear_velocity + 1e-9);
+            REQUIRE(std::hypot(dvx, dvy) <= limits.max_linear_acceleration * dt * 1.2 + 1e-9);
             REQUIRE(ctrl.pose().x <= goal.x + 1e-9);
             previous = out.velocity;
         }
@@ -174,7 +174,7 @@ TEST_CASE("chassis: far pose goals still move at the speed limit") {
         ChassisConfig config;
         config.kinematics = kinematics;
         auto ctrl = started(config, 0.02);
-        const double max_linear = ctrl.pose_limits().linear_velocity;
+        const double max_linear_velocity = ctrl.pose_limits().max_linear_velocity;
         for (const Pose2D goal : {Pose2D{1e4, 0, 0}, Pose2D{1e7, 1e7, 1.0}}) {
             INFO("kinematics=" << static_cast<int>(kinematics) << " goal.x=" << goal.x);
             double now = 0.0;
@@ -187,8 +187,8 @@ TEST_CASE("chassis: far pose goals still move at the speed limit") {
                 REQUIRE(out.reason == ChassisReason::tracking);
             }
             const double travelled = std::hypot(ctrl.pose().x - start.x, ctrl.pose().y - start.y);
-            CHECK(travelled > 0.5 * max_linear * 10.0 - 3.0);
-            CHECK(std::hypot(ctrl.output().vx, ctrl.output().vy) > 0.5 * max_linear);
+            CHECK(travelled > 0.5 * max_linear_velocity * 10.0 - 3.0);
+            CHECK(std::hypot(ctrl.output().vx, ctrl.output().vy) > 0.5 * max_linear_velocity);
             ctrl = started(config, 0.02);
         }
     }
@@ -224,8 +224,8 @@ TEST_CASE("chassis: differential pose mode turns, drives and aligns") {
     const Pose2D pose = ctrl.pose();
     CHECK(saw_drive);
     CHECK(saw_final);
-    CHECK(std::hypot(pose.x - goal.x, pose.y - goal.y) <= 1.5 * config.arrival_position_tolerance);
-    CHECK(std::abs(wrap_angle(pose.yaw - goal.yaw)) <= 1.5 * config.arrival_rotation_tolerance);
+    CHECK(std::hypot(pose.x - goal.x, pose.y - goal.y) <= 1.5 * config.position_tolerance);
+    CHECK(std::abs(wrap_angle(pose.yaw - goal.yaw)) <= 1.5 * config.orientation_tolerance);
     CHECK(ctrl.output().vx == 0.0);
     CHECK(ctrl.output().wz == 0.0);
 }
@@ -235,8 +235,8 @@ TEST_CASE("chassis: unlimited axis does not replay another axis's brake profile"
     // unbounded, so its update skips the brake computation and must not inherit the angular one.
     auto ctrl = started(differential(), 0.02);
     ChassisPoseLimits limits;
-    limits.angular_velocity = 1.0;
-    limits.angular_acceleration = 2.0;
+    limits.max_angular_velocity = 1.0;
+    limits.max_angular_acceleration = 2.0;
     CHECK_FALSE(ctrl.tune_pose_limits(limits));  // default axis_phase is omni-only
     limits.planner_mode = ChassisPlannerMode::straight;
     REQUIRE(ctrl.tune_pose_limits(limits));
@@ -255,7 +255,7 @@ TEST_CASE("chassis: unlimited axis does not replay another axis's brake profile"
             ++checked;
         }
         if (!lowered && out.velocity.wz > 0.9) {
-            limits.angular_velocity = 0.3;
+            limits.max_angular_velocity = 0.3;
             REQUIRE(ctrl.tune_pose_limits(limits));
             lowered = true;
         }
@@ -273,7 +273,7 @@ TEST_CASE("chassis: SE(2) integration and angle wrapping") {
 
 TEST_CASE("chassis: invalid input is reported, not thrown") {
     ChassisConfig bad;
-    bad.max_linear = 0.0;
+    bad.max_linear_velocity = 0.0;
     auto c = ChassisController::create(bad);
     REQUIRE_FALSE(c);
     CHECK(c.error().code == ErrorCode::invalid_argument);
@@ -297,7 +297,7 @@ TEST_CASE("chassis: invalid input is reported, not thrown") {
     CHECK_FALSE(ctrl->submit_odometry({0, nan, 0}, 0.0, 0.0));
 
     ChassisPoseLimits limits;
-    limits.linear_velocity = -1.0;
+    limits.max_linear_velocity = -1.0;
     CHECK_FALSE(ctrl->tune_pose_limits(limits));
 
     ctrl->stop(0.1);
@@ -376,12 +376,12 @@ TEST_CASE("chassis: drives the base of a mobile model with the root locked") {
     auto base = m->root_pose(q);
     REQUIRE(base);
     const double base_error = std::hypot(base->translation().x() - goal.x, base->translation().y() - goal.y);
-    const double tolerance = 1.5 * ChassisConfig{}.arrival_position_tolerance;
+    const double tolerance = 1.5 * ChassisConfig{}.position_tolerance;
     CHECK(base_error < tolerance);
     // The differential base settles within its arrival tolerance; the 4-DOF arm cannot cancel that
     // offset for a full 6D target, so the tool error is bounded by the base tolerance.
     CHECK((reached.translation() - target.translation()).norm() < tolerance);
-    CHECK((reached.linear() - target.linear()).norm() < 1.5 * ChassisConfig{}.arrival_rotation_tolerance);
+    CHECK((reached.linear() - target.linear()).norm() < 1.5 * ChassisConfig{}.orientation_tolerance);
 
     // Attribute that residual to the base offset alone: re-target the same arm configuration with the base
     // where it actually stopped; the locked-root solve must then converge to the target exactly.

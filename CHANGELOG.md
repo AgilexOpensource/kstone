@@ -6,7 +6,7 @@
 
 First release.
 
-- Inverse kinematics configured from YAML, with the modules `frame_task`, `joint_target`, `gaze`, `chassis`, `center_of_mass`, `null_space_preference`, `self_collision` and `world_collision`.
+- Inverse kinematics configured from YAML, with the modules `frame_target`, `joint_target`, `gaze`, `chassis`, `center_of_mass`, `null_space`, `self_collision` and `world_collision`.
 - Solver modes `weighted`, `lexicographic`, `layered_independent` and `layered_coupled`.
 - An engine that runs the solve as a control loop against a robot driver plugin.
 - A debug server, and a web viewer for testing in the separate [kstone-viewer](https://github.com/AgilexOpensource/kstone_viewer) repository.

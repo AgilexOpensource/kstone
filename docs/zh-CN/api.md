@@ -15,7 +15,7 @@
 | [runtime/snapshot.hpp](../../include/kstone/runtime/snapshot.hpp) | `EngineSnapshot`、`TelemetrySink`、`make_telemetry_observer`：只读遥测 |
 | [runtime/robot.hpp](../../include/kstone/runtime/robot.hpp) | `RobotInterface`：C++ 驱动或仿真器；`LoopbackRobot` |
 | [runtime/robot_plugin.hpp](../../include/kstone/runtime/robot_plugin.hpp) | `load_robot_plugin`：加载 C ABI 驱动库 |
-| [runtime/debug_server.hpp](../../include/kstone/runtime/debug_server.hpp) | 调试服务（遥测、调参、控制租约） |
+| [runtime/debug_server.hpp](../../include/kstone/runtime/debug_server.hpp) | 调试服务（遥测、调参、控制源、API 优先） |
 | [runtime/doctor.hpp](../../include/kstone/runtime/doctor.hpp) | 环境自检 |
 | [module/module.hpp](../../include/kstone/module/module.hpp) | `Module`：端口读写、启停、tune；`ModuleSet`：不带机器人的离线求解；内置模块见 [modules](modules/README.md) |
 | [module/config.hpp](../../include/kstone/module/config.hpp)、[module/yaml.hpp](../../include/kstone/module/yaml.hpp) | `ConfigNode`；YAML 加载、`!include`、`${var}` 展开 |

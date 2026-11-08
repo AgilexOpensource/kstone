@@ -9,7 +9,7 @@
 ## 基本概念
 
 - **配置**：一份 YAML 文件，包含机器人模型（`model:`）、要驱动的机器人（`robot:`）和一组**模块**（`modules:`）。见[配置](config.md)。
-- **模块**：一个目标或限制，比如"把这个坐标系移到某个位姿"（`frame_task`）或"把这些关节转到某些角度"（`joint_target`）。通过写模块的**端口**来下发命令。
+- **模块**：一个目标或限制，比如"把这个坐标系移到某个位姿"（`frame_target`）或"把这些关节转到某些角度"（`joint_target`）。通过写模块的**端口**来下发命令。
 - **Solver**：根据当前关节位置和各模块的目标，算出下一步的关节位置。不涉及机器人，也不涉及时序。
 - **Engine**：Solver 加上机器人和固定频率的循环。每个周期读取机器人状态、求解、发送命令。
 - **q** 和 **v**：关节位置（长度 `model.nq`）和关节速度（长度 `model.nv`）。机器人有连续关节或浮动基座时两者长度不同，所以要用 `model.q_index(name)` 和 `model.v_index(name)` 按关节名查下标。
@@ -39,7 +39,7 @@ for _ in range(300):
 | `residuals` | 每个任务剩余的误差 |
 | `held` | 这一步求解失败、机器人保持原位时为 `True` |
 
-位姿目标可以是 4×4 矩阵，也可以是 `{"translation": [x, y, z], "rotation": [w, x, y, z]}`：
+位姿目标可以是 4×4 矩阵，也可以是 `{"position": [x, y, z], "orientation": [w, x, y, z]}`：
 
 ```python
 ws = kstone.Workspace(solver.model)
@@ -63,7 +63,7 @@ print(engine.stats["cycles"], engine.stats["failed_cycles"])
 ```
 
 - `run()` 会阻塞，直到过了 `duration_s` 或者另一个线程调用了 `stop()`。不传时长就一直运行到停止为止。
-- 配置里是 `realtime: false` 时，`run()` 以最快速度推进模拟时间；`realtime: true` 时按真实时钟运行。
+- `run()` 按真实时钟运行。要比实时更快地推进（测试、离线仿真），循环调用 `step()`。
 - `engine.q` 是命令的关节位置，`engine.measured` 是最近一次从机器人读到的关节位置。
 - `engine.snapshot()` 把所有状态打包成一个 dict 返回。
 
@@ -121,7 +121,7 @@ engine.tune_joint_limits({"reset": True})
 
 ```bash
 pip install "git+https://github.com/AgilexOpensource/kstone_viewer.git"
-kstone run tests/fixtures/arm_loopback.yaml --realtime --serve 7311
+kstone run tests/fixtures/arm_loopback.yaml --serve 7311
 # 在第二个终端里
 kstone-viewer --connect 127.0.0.1:7311
 ```

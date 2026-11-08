@@ -8,7 +8,6 @@
 model:
   file: arm.urdf
 rate_hz: 100
-realtime: false
 robot:
   type: loopback
 modules:
@@ -24,7 +23,7 @@ modules:
 |---|---|---|
 | `model` | 必填 | 机器人模型，见 [model](#model) |
 | `rate_hz` | 100 | 控制频率 |
-| `realtime` | true | 按时钟节拍运行；`kstone run --realtime` 强制开启 |
+| `realtime` | false | 在 `run()` 中应用 `thread` 设置（实时调度）；`kstone run --realtime` 强制开启。`run()` 总是按时钟节拍运行 |
 | `feedback_timeout_s` | 0.25 | 反馈超过该时长或没有时间戳即视为过期；0 = 永不过期。见[运行契约](robot.md#run-contract) |
 | `max_failed_cycles` | 5 | 连续失败这么多个周期后 `run()` 返回 |
 | `feedback_joints` | 全部标量关节 | 实测位置参与闭环估计（碰撞、质心、回零）的关节。关节名或 fnmatch 模式 |
@@ -45,6 +44,7 @@ modules:
 | `root_joint_name` | `root_joint` | 浮动基座关节名 |
 | `mimic` | `independent` | `independent` 把 mimic 从动关节当普通自由度；`coupled` 由主动关节带动 |
 | `joint_limits` | | 按关节覆盖限位，见下文 |
+| `locked_joints` | | 保持在初始值的关节，见下文 |
 
 `joint_limits` 替换模型里对应关节的限位，所以也可以放宽：
 
@@ -56,6 +56,14 @@ model:
     position:
       lower: {torso_joint_2: 0.2618}
       upper: {torso_joint_2: 2.2}
+```
+
+`locked_joints` 列出求解器永远不动的关节。它们保持 `robot.initial` 的值（没给就用零位），仍留在模型里，也仍在状态和命令里，所以 `joint_states` 依旧完整。列了锁定关节的模块继续用其余关节工作。浮动基座和 coupled 模式下的 mimic 跟随关节不能列；前者用 `root: fixed`，后者锁它的主关节：
+
+```yaml
+model:
+  file: robot.urdf
+  locked_joints: [left_wheel_joint, right_wheel_joint]
 ```
 
 相对的 `file` 路径先按配置文件所在目录解析，相对的 `package_dirs` 条目也按该目录解析。
@@ -77,7 +85,7 @@ model:
 | `mode` | `weighted` | [任务层级](modules/README.md#task-levels)如何变成 QP 阶段，见下表 |
 | `damping` | 1e-3 | 加到 QP Hessian 对角线上，> 0 |
 | `limit_gain` | 0.5 | 每步可用的到位置限位距离的比例，取值 (0, 1] |
-| `feasibility_tol` | 1e-6 | 可行性检查的容差 |
+| `feasibility_tolerance` | 1e-6 | 可行性检查的容差 |
 | `check_feasibility` | true | 按约束检查每个解 |
 | `hold_retry` | true | 阶段不可行时放宽恢复要求重试，仍失败则保持不动 |
 
@@ -98,7 +106,7 @@ model:
 | `library` | | 插件动态库。含 `/` 的路径按配置文件目录解析，裸名走动态库搜索路径 |
 | `params` | | 任意映射，原样传给插件的 `create()` |
 | `initial` | 模型零位 | 初始 q：长度为 nq 的列表，或在零位基础上覆盖的映射 `{关节: 值}`。也是各模块的初始姿态 |
-| `initial_root` | | 浮动基座初始位姿 `{translation, rpy}` 或 `{translation, quaternion}`。不能与列表形式的 `initial` 同用 |
+| `initial_root` | | 浮动基座初始位姿 `{position, rpy}` 或 `{position, quaternion}`。不能与列表形式的 `initial` 同用 |
 
 ## modules
 
@@ -118,3 +126,16 @@ modules: !include modules.yaml  # path relative to this file
 - 整个标量只有一个占位符时会重新推断类型，所以 `${rate:-50}` 是数字。
 - 用 `kstone run/check --set name=value`（可重复）传变量，Python 加载函数用 `vars={"name": "value"}`。传入的每个变量都必须在配置里被引用，否则加载失败，报 KST-E010。
 - Python 的 `load_*_from_string` 也展开占位符；`base_dir` 指定相对路径和 include 的解析目录。
+
+<a id="naming-conventions"></a>
+## 命名约定
+
+各模块的键遵循以下规则：
+
+- 时长以 `_s` 结尾（秒）；其他单位见各模块文档。
+- `max_` 表示上限；`*_limits` 组内字段本身就是上限，不再加 `max_`。
+- `_scale` 是无量纲比例；`_factor` 是带单位的系数（如 `acceleration_factor`，1/s）。
+- `speed` 是标量大小；`velocity` 是向量、逐轴速率或其限制。
+- 位姿量用 `position` / `orientation`；速率和限制用 `linear` / `angular`。
+- 位姿值在端口上是 `{position, orientation}`（wxyz 四元数），在配置里是 `{position, quaternion}` 或 `{position, rpy}`。
+- `velocity_limit` 是 joint_target 规划时用的逐关节速度限制（求解器仍按模型限制约束）；`max_velocity` 是对单个模块自身运动的额外上限，如轨迹的巡航速度。

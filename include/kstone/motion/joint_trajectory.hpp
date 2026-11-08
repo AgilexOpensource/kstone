@@ -26,7 +26,7 @@ struct JointTrajectoryConfig {
     double acceleration_factor{2.0};  ///< max acceleration = factor * velocity limit, > 0.
     double jerk_factor{10.0};         ///< max jerk = factor * max acceleration, > 0.
     double velocity_scale{1.0};       ///< (0, 1]: lowers the cruise speed only; braking keeps full limits.
-    Eigen::VectorXd velocity_cap;  ///< Empty, or one entry > 0 per joint (inf = none); caps the cruise speed.
+    Eigen::VectorXd max_velocity;  ///< Empty, or one entry > 0 per joint (inf = none); caps the cruise speed.
 
     KSTONE_EXPORT Status validate(Eigen::Index size) const;
 };

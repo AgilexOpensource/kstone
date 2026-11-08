@@ -32,7 +32,7 @@ struct CommandGuardOptions {
     double tolerance{1e-6};      ///< Slack on position and velocity comparisons.
 };
 
-/// Real-time setup applied when Engine::run starts (Linux only). A setting the OS refuses is logged as a warning
+/// Real-time setup applied when Engine::run starts with realtime on (Linux only); ignored otherwise. A setting the OS refuses is logged as a warning
 /// and run() continues without it; priority and cpus are restored when run() returns.
 struct ThreadOptions {
     /// 0 = keep the current policy; otherwise SCHED_FIFO at this priority (1..99, higher preempts lower), which
@@ -45,11 +45,18 @@ struct ThreadOptions {
     bool lock_memory{false};
 };
 
+/// Privilege helper (kstone run calls it when realtime) for a process that will run with `thread`: if RLIMIT_RTPRIO (or, with lock_memory,
+/// RLIMIT_MEMLOCK) is too low and the matching capability is missing, runs `sudo prlimit --pid <self> ...`, which
+/// may prompt for a password on the controlling terminal. The process itself never gains root. Returns ok when
+/// nothing was needed or the limits were raised; otherwise an error the caller should log and continue past.
+/// Call before Engine::run, from a process with a terminal. Linux only; elsewhere returns unsupported.
+KSTONE_EXPORT Status elevate_thread_limits(const ThreadOptions& thread, const Logger& log);
+
 struct EngineOptions {
     double rate_hz{100.0};
-    /// Sleep to each deadline of Context::clock (which must follow wall time); otherwise run back to back.
-    /// Either way `now` advances by exactly 1 / rate_hz per cycle (Engine::set_rate_hz changes it at runtime).
-    bool realtime{true};
+    /// Apply `thread` in run() (callers such as kstone run also call elevate_thread_limits first). run() always
+    /// sleeps to each deadline of Context::clock; `now` advances by exactly 1 / rate_hz per cycle.
+    bool realtime{false};
     /// > 0: feedback with an unknown RobotState::stamp_ns or older than this (s) is stale; 0 = always fresh.
     /// Default 0.25 s, so drivers must stamp their reads or set 0.
     /// Stale feedback only drops the measured estimate (closed-loop terms use the commanded state); the command

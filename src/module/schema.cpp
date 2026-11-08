@@ -198,7 +198,7 @@ Status decode(const ConfigNode& n, const std::string& path, const FieldMeta&, Ei
     bool has_rotation = false;
     for (const auto& [key, value] : n.entries()) {
         const std::string p = config_path(path, key);
-        if (key == "translation") {
+        if (key == "position") {
             if (auto s = numbers(value, p, plain, 3, translation.data()); !s) return s;
         } else if (key == "quaternion" || key == "rpy") {
             if (has_rotation) return invalid(value, p, "give either quaternion or rpy, not both");
@@ -219,7 +219,7 @@ Status decode(const ConfigNode& n, const std::string& path, const FieldMeta&, Ei
                            Eigen::AngleAxisd(rpy[0], Eigen::Vector3d::UnitX());
             }
         } else {
-            return unknown_key(value, p, {"translation", "quaternion", "rpy"});
+            return unknown_key(value, p, {"position", "quaternion", "rpy"});
         }
     }
     out = Eigen::Isometry3d::Identity();
@@ -322,7 +322,7 @@ ConfigNode encode(const Eigen::Isometry3d& v) {
     const Eigen::Quaterniond q(v.linear());
     const double wxyz[4] = {q.w(), q.x(), q.y(), q.z()};
     return ConfigNode::map(
-        {{"translation", number_list(v.translation().data(), 3)}, {"quaternion", number_list(wxyz, 4)}});
+        {{"position", number_list(v.translation().data(), 3)}, {"quaternion", number_list(wxyz, 4)}});
 }
 
 ConfigNode encode(const Points2& v) {
@@ -363,7 +363,7 @@ ConfigNode json_type(const Eigen::Isometry3d*) {
     ConfigNode schema = object_schema(
         "Rigid transform; rotation as unit quaternion [w, x, y, z] or rpy [roll, "
         "pitch, yaw] (rad, extrinsic X-Y-Z), not both.",
-        {{"translation", fixed_array(number_type(), 3)},
+        {{"position", fixed_array(number_type(), 3)},
          {"quaternion", fixed_array(number_type(), 4)},
          {"rpy", fixed_array(number_type(), 3)}},
         {});

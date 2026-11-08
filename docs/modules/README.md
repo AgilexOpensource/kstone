@@ -6,9 +6,9 @@ Modules are the entries under `modules:` in a [config](../config.md). The key is
 
 | Type | Purpose |
 |---|---|
-| [frame_task](frame_task.md) | Make a frame track a pose target |
+| [frame_target](frame_target.md) | Make a frame track a pose target |
 | [joint_target](joint_target.md) | Joint-space target, direct joint control |
-| [null_space_preference](null_space_preference.md) | Posture preference in a frame_task's null space |
+| [null_space](null_space.md) | Posture preference in a frame_target's null space |
 | [gaze](gaze.md) | Point a camera at a set of frames |
 | [center_of_mass](center_of_mass.md) | Keep the CoM inside a support polygon |
 | [self_collision](self_collision.md) | Self-collision avoidance |
@@ -24,7 +24,7 @@ Ports are a module's runtime inputs. `Module.ports` lists their names, types and
 | Type | Value |
 |---|---|
 | `vector` | Fixed-length array with `labels`, `lower`, `upper` |
-| `pose` | `{translation, rotation}` (rotation is a wxyz quaternion) or a 4×4 matrix; `frame` / `reference` give the target's frames |
+| `pose` | `{position, orientation}` (orientation is a wxyz quaternion) or a 4×4 matrix; `frame` / `reference` give the target's frames |
 | `flag` | bool |
 | `number` | scalar |
 
@@ -41,8 +41,8 @@ Fields marked `tunable: true` in the schema can be changed at runtime:
 
 ```python
 waist = e.module("waist")
-waist.tune({"trajectory": {"translation": {"velocity": 0.5}}})
-print(waist.params()["trajectory"]["translation"]["velocity"])  # 0.5
+waist.tune({"trajectory": {"position": {"velocity": 0.5}}})
+print(waist.params()["trajectory"]["position"]["velocity"])  # 0.5
 ```
 
 ## Enabling and joint ownership
@@ -54,7 +54,7 @@ print(waist.params()["trajectory"]["translation"]["velocity"])  # 0.5
 
 ## Task levels
 
-Modules with a `task` field (frame_task, joint_target, null_space_preference, gaze) register a task with the solver:
+Modules with a `task` field (frame_target, joint_target, null_space, gaze) register a task with the solver:
 
 - `task.level`: priority in the layered solve; lower is more important.
 - `task.enabled`: whether the task takes part in the solve.
@@ -64,7 +64,9 @@ center_of_mass, self_collision and world_collision join the solve as inequality 
 
 ## Homing
 
-Modules with `Module.homeable` true (frame_task, joint_target) accept `home()`. `home_state` is `idle` / `waiting` / `executing` / `succeeded` / `timed_out` / `aborted`. `home_motion.velocity_scale` sets the speed. `home_motion.timeout_s` is a no-progress timeout, so a move that keeps approaching is not cut off.
+Modules with `Module.homeable` true (frame_target, joint_target) accept `home()`. `home_state` is `idle` / `waiting` / `executing` / `succeeded` / `timed_out` / `aborted`. `home_motion.velocity_scale` sets the speed. `home_motion.timeout_s` is a no-progress timeout, so a move that keeps approaching is not cut off.
+
+`ModuleSet::home_all()` (Python `Engine.home_all()`, debug op `home_all`) homes, per joint, the module that controls it as of the last step: the granted claim holder, otherwise the enabled module that most recently received a target there. Which module controls a joint is thus decided by where the user last sent a target. If that module is not homeable (gaze), the joint keeps still; joints nobody controls are skipped. A module held by another is never homed by `home_all`, but its own `home` still works.
 
 ## Outputs and visuals
 

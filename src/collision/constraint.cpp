@@ -13,7 +13,7 @@ namespace {
 
 Status check_distances(const CollisionConstraintOptions& o) {
     const auto non_negative = [](double v) { return std::isfinite(v) && v >= 0.0; };
-    if (!non_negative(o.d_min) || !non_negative(o.gain) || !non_negative(o.activation_margin) ||
+    if (!non_negative(o.clearance) || !non_negative(o.gain) || !non_negative(o.activation_margin) ||
         !non_negative(o.hysteresis) || !non_negative(o.clip_slack) || !non_negative(o.approach_deceleration))
         return make_error(ErrorCode::invalid_argument,
                           "collision constraint: options must be finite and >= 0");
@@ -134,17 +134,17 @@ double CollisionConstraint::motion_bound(const Eigen::VectorXd& dq) const {
 bool CollisionConstraint::checks_end(const Eigen::VectorXd& q_end, const Eigen::VectorXd& dq) const {
     if (commanded_ == nullptr || record_start_ || !std::isfinite(start_nearest_)) return false;
     if (verified_ && verified_q_ == q_end) return false;
-    // Each pair has at most two moving sides; a pair's floor is min(d_min, its start distance) - clip_slack.
+    // Each pair has at most two moving sides; a pair's floor is min(clearance, its start distance) - clip_slack.
     const double reach = 2.0 * motion_bound(dq);
     const double slack = options_.clip_slack;
-    return (start_nearest_ < options_.d_min && reach > slack) ||
-           start_nearest_ - reach < options_.d_min - slack;
+    return (start_nearest_ < options_.clearance && reach > slack) ||
+           start_nearest_ - reach < options_.clearance - slack;
 }
 
 bool CollisionConstraint::admits(const Tick& end) {
     if (&end.workspace != commanded_ || record_start_) return true;
     const double slack = options_.clip_slack;
-    if (Status s = query_.update(end.workspace, std::max(options_.d_min - slack, 0.0), false); !s)
+    if (Status s = query_.update(end.workspace, std::max(options_.clearance - slack, 0.0), false); !s)
         return false;
     const bool same = query_.layout() == layout_;
     admitted_fraction_ = 1.0;
@@ -152,7 +152,7 @@ bool CollisionConstraint::admits(const Tick& end) {
         if (same && exempt(p.pair)) continue;
         double start = same ? start_distance_[static_cast<std::size_t>(p.pair)] : start_nearest_;
         if (!std::isfinite(start)) start = start_bound_;  // unrecorded pairs started at least this far apart
-        const double floor = std::min(options_.d_min, start) - slack;
+        const double floor = std::min(options_.clearance, start) - slack;
         if (p.distance >= floor - 1e-9) continue;
         // Distance taken linear in the step scale between the start and this end.
         const double t = start > p.distance ? (start - floor) / (start - p.distance) : 0.0;
@@ -180,17 +180,19 @@ Index CollisionConstraint::add_cuts(const Tick& candidate) {
     verified_ = false;
     if (options_.max_cuts == 0 || &candidate.workspace != commanded_ || record_start_) return 0;
     if (cut_count_ == options_.max_cuts) return 0;
-    const double d_min = options_.d_min;
-    if (Status s = query_.update(candidate.workspace, d_min, false); !s) return 0;
+    const double clearance = options_.clearance;
+    if (Status s = query_.update(candidate.workspace, clearance, false); !s) return 0;
     if (query_.layout() != layout_) return 0;  // the pair list changed under the step
     Index added = 0;
     bool clean = true;
     for (const Proximity& p : query_.proximities()) {
         if (exempt(p.pair)) continue;
         const double start = start_distance_[static_cast<std::size_t>(p.pair)];
-        // A pair outside d_min stays outside; one inside comes back out by its recovery share.
+        // A pair outside clearance stays outside; one inside comes back out by its recovery share.
         const double floor =
-            start >= d_min ? d_min : std::min(d_min, start + options_.gain * (d_min - start) * candidate.dt);
+            start >= clearance
+                ? clearance
+                : std::min(clearance, start + options_.gain * (clearance - start) * candidate.dt);
         if (p.distance >= floor - 1e-9) continue;
         if (cut_count_ == options_.max_cuts) {
             clean = false;
@@ -218,8 +220,8 @@ void CollisionConstraint::track_exemptions() {
         next_seen_[pair] = 1;
         // Penetrating on entering the band: no local escape is guaranteed, so leave it free until clear.
         const bool entered = !tracked_ || !seen_[pair];
-        exempt_[pair] = options_.exempt_penetrating &&
-                        ((exempt_[pair] && p.distance <= options_.d_min) || (entered && p.distance < 0.0));
+        exempt_[pair] = options_.exempt_penetrating && ((exempt_[pair] && p.distance <= options_.clearance) ||
+                                                        (entered && p.distance < 0.0));
     }
     for (std::size_t i = 0; i < exempt_.size(); ++i)
         if (!next_seen_[i]) exempt_[i] = 0;
@@ -237,7 +239,7 @@ double CollisionConstraint::obstacle_rate(const Proximity& p) const {
 
 Status CollisionConstraint::compute(const Tick& tick, Eigen::Ref<Eigen::MatrixXd> A,
                                     Eigen::Ref<Eigen::VectorXd> lo, Eigen::Ref<Eigen::VectorXd>) {
-    const double activate = options_.d_min + options_.activation_margin;
+    const double activate = options_.clearance + options_.activation_margin;
     const double keep = activate + options_.hysteresis;
     if (Status s = query_.update(tick.workspace, keep); !s) return s;
     if (query_.layout() != layout_) {
@@ -272,7 +274,7 @@ Status CollisionConstraint::compute(const Tick& tick, Eigen::Ref<Eigen::MatrixXd
         if (row == static_cast<Index>(selected_.size())) break;
         if (p.pair != selected_[static_cast<std::size_t>(row)]) continue;
         if (Status s = query_.jacobian(tick.workspace, p, A.row(row)); !s) return s;
-        const double margin = p.distance - options_.d_min;
+        const double margin = p.distance - options_.clearance;
         double rate = options_.gain * margin;
         if (options_.approach_deceleration > 0.0 && margin > 0.0)
             rate = std::max(rate, std::min(std::sqrt(2.0 * options_.approach_deceleration * margin),

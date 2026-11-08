@@ -100,7 +100,7 @@ ParamSchema<EngineConfig> engine_schema() {
             "Initial q: a list of size nq, or a map {joint: value} over the model neutral; empty = neutral. "
             "Also the modules' initial posture.");
     robot.field("initial_root", &RobotSection::initial_root)
-        .doc("Initial root pose {translation, rpy|quaternion}. Not with a list initial.");
+        .doc("Initial root pose {position, rpy|quaternion}. Not with a list initial.");
     robot.field("library", &RobotSection::library)
         .doc(
             "Plugin shared library; paths with '/' resolve against the config file, bare names use the "
@@ -244,6 +244,41 @@ Result<ModelPtr> apply_joint_limits(ModelPtr model, const ConfigNode& limits) {
     return model;
 }
 
+// model.locked_joints: [<joint>]; held at their initial value and excluded from solving.
+Result<Mask> locked_joints_mask(const Model& model, const ConfigNode& list) {
+    const std::string root = "model.locked_joints";
+    if (list.kind() != ConfigNode::Kind::list)
+        return limits_error(list, root, "expected a list, got " + std::string(to_string(list.kind())),
+                            ConfigDiag::wrong_type)
+            .error();
+    Mask mask(static_cast<std::size_t>(model.nv()));
+    std::vector<std::string> seen;
+    for (std::size_t i = 0; i < list.items().size(); ++i) {
+        const ConfigNode& node = list.items()[i];
+        const std::string path = root + "[" + std::to_string(i) + "]";
+        if (node.kind() != ConfigNode::Kind::string)
+            return limits_error(node, path, "expected a string, got " + std::string(to_string(node.kind())),
+                                ConfigDiag::wrong_type)
+                .error();
+        const std::string& name = node.as_string();
+        auto joint = model.joint_id(name);
+        if (!joint) return limits_error(node, path, "unknown joint '" + name + "'").error();
+        if (std::find(seen.begin(), seen.end(), name) != seen.end())
+            return limits_error(node, path, "duplicate joint '" + name + "'").error();
+        seen.push_back(name);
+        const JointInfo& j = model.joints()[static_cast<std::size_t>(*joint)];
+        if (model.root() != RootJoint::fixed && *joint == 1)
+            return limits_error(node, path, "'" + name + "' is the model root; use model.root: fixed")
+                .error();
+        if (j.nv == 0)
+            return limits_error(node, path,
+                                "'" + name + "' has no velocity coordinate (coupled mimic follower)")
+                .error();
+        mask.set_range(static_cast<std::size_t>(j.idx_v), static_cast<std::size_t>(j.nv));
+    }
+    return mask;
+}
+
 }  // namespace
 
 Result<Engine> build_engine(const ConfigNode& config, const std::filesystem::path& base_dir,
@@ -258,6 +293,7 @@ Result<Engine> build_engine(const ConfigNode& config, const std::filesystem::pat
     ConfigNode robot_params;
     ConfigNode initial_map;
     ConfigNode joint_limits;
+    ConfigNode locked_joints;
     for (const auto& [key, value] : config.entries()) {
         if (key == "modules") {
             modules = value;
@@ -271,6 +307,8 @@ Result<Engine> build_engine(const ConfigNode& config, const std::filesystem::pat
             for (const auto& [k, v] : value.entries()) {
                 if (k == "joint_limits")
                     joint_limits = v;  // name-keyed; applied after the model loads
+                else if (k == "locked_joints")
+                    locked_joints = v;
                 else
                     model.set(k, v);
             }
@@ -297,7 +335,7 @@ Result<Engine> build_engine(const ConfigNode& config, const std::filesystem::pat
         // Keys split off above are not in the schema; list them so the hint is complete.
         Error e = std::move(s).error();
         for (const auto& [tail, extra] : {std::pair<const char*, const char*>{"solver, robot)", ", modules"},
-                                          {"root_joint_name, mimic)", ", joint_limits"},
+                                          {"root_joint_name, mimic)", ", joint_limits, locked_joints"},
                                           {"initial_root, library)", ", params"}})
             if (const std::size_t at = e.message.find(tail); at != std::string::npos)
                 e.message.insert(at + std::strlen(tail) - 1, extra);
@@ -367,6 +405,11 @@ Result<Engine> build_engine(const ConfigNode& config, const std::filesystem::pat
             "robot.initial",
             "expected " + std::to_string((*model)->nq()) + " values, got " + std::to_string(q0.size()));
 
+    if (!locked_joints.is_null()) {
+        auto mask = locked_joints_mask(**model, locked_joints);
+        if (!mask) return std::move(mask).error();
+        cfg.solver.locked = std::move(*mask);
+    }
     auto set = ModuleSet::create(*model, cfg.solver, ctx);
     if (!set) return std::move(set).error();
     if (auto s = set->set_initial(q0); !s)

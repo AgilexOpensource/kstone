@@ -254,8 +254,8 @@ Status MotionLimits::validate() const {
 }
 
 Status PoseTrajectoryConfig::validate() const {
-    if (auto status = translation.validate(); !status) return status;
-    if (auto status = rotation.validate(); !status) return status;
+    if (auto status = position.validate(); !status) return status;
+    if (auto status = orientation.validate(); !status) return status;
     if (!std::isfinite(lead_speed_scale) || lead_speed_scale < 0.0)
         return make_error(ErrorCode::invalid_argument,
                           "pose trajectory: lead_speed_scale must be finite and >= 0");
@@ -350,7 +350,7 @@ Status PoseTrajectory::step(const Eigen::Isometry3d& observed, const Eigen::Isom
     const Eigen::Vector3d linear_error = target.translation() - s.last.translation();
     const Step translation =
         advance_axis(s.translation_plan, s.generator, linear_error, s.translation_velocity,
-                     s.translation_acceleration, c.translation, dt, phase, false, translation_goal);
+                     s.translation_acceleration, c.position, dt, phase, false, translation_goal);
     next.translation() += translation.position;
     s.translation_velocity = translation.velocity;
     s.translation_acceleration = translation.acceleration;
@@ -360,8 +360,9 @@ Status PoseTrajectory::step(const Eigen::Isometry3d& observed, const Eigen::Isom
     const Eigen::Matrix3d last_rotation = s.last.linear();
     const Eigen::AngleAxisd difference(Eigen::Matrix3d(last_rotation.transpose() * target.linear()));
     const Eigen::Vector3d rotation_error = last_rotation * difference.axis() * difference.angle();
-    const Step rotation = advance_axis(s.rotation_plan, s.generator, rotation_error, s.rotation_velocity,
-                                       s.rotation_acceleration, c.rotation, dt, phase, true, rotation_goal);
+    const Step rotation =
+        advance_axis(s.rotation_plan, s.generator, rotation_error, s.rotation_velocity,
+                     s.rotation_acceleration, c.orientation, dt, phase, true, rotation_goal);
     s.rotation_velocity = rotation.velocity;
     s.rotation_acceleration = rotation.acceleration;
     const double angle = rotation.position.norm();
@@ -372,8 +373,8 @@ Status PoseTrajectory::step(const Eigen::Isometry3d& observed, const Eigen::Isom
     // Leash: keep the ramp within lead_speed_scale * velocity * lead_period of the observed frame on each world
     // axis, but only where it leads the frame in the direction still to go. A clamped axis takes the frame's own
     // velocity (capped at the limit) and the translation plan is rebuilt from the clamped pose.
-    if (c.lead_speed_scale > 0 && c.translation.enabled()) {
-        const double velocity = c.translation.velocity;
+    if (c.lead_speed_scale > 0 && c.position.enabled()) {
+        const double velocity = c.position.velocity;
         const double bound = c.lead_speed_scale * velocity * PoseTrajectoryConfig::lead_period;
         const Eigen::Vector3d lead = next.translation() - observed.translation();
         const Eigen::Vector3d remaining = target.translation() - next.translation();

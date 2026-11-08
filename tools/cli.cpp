@@ -29,7 +29,8 @@ int usage(std::FILE* out) {
         "usage: kstone run <config.yaml> [options]   run until the duration elapses or "
         "Ctrl-C/SIGTERM/SIGHUP\n"
         "         --duration <s>                     stop after s seconds of engine time (0: no limit)\n"
-        "         --realtime                         pace cycles with the clock (overrides the config)\n"
+        "         --realtime                         apply thread.* (overrides the config), raising limits via\n"
+        "                                            sudo prlimit when needed\n"
         "         --serve [host:port|port]           debug server (127.0.0.1:7311); non-loopback needs a "
         "token\n"
         "         --token-file <path>                server token (16+ bytes); else $KSTONE_TOKEN if set\n"
@@ -203,9 +204,13 @@ int kstone_cli_main(int argc, char** argv) {
     const auto& model = *engine->modules().model();
     std::printf("loaded %s: nq=%ld nv=%ld, %zu modules, %.1f Hz%s\n", argv[2], static_cast<long>(model.nq()),
                 static_cast<long>(model.nv()), engine->modules().modules().size(), engine->options().rate_hz,
-                engine->options().realtime ? "" : " (not realtime)");
+                engine->options().realtime ? ", realtime" : "");
     std::fflush(stdout);
     if (command == "check") return 0;
+    if (engine->options().realtime) {
+        const kstone::Status raised = kstone::elevate_thread_limits(engine->options().thread, context.log);
+        if (!raised) std::fprintf(stderr, "kstone: %s; continuing\n", raised.error().message.c_str());
+    }
 
     std::shared_ptr<kstone::DebugServer> server;
     if (serve) {

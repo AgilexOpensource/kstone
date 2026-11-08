@@ -83,7 +83,7 @@ python3 -m pip install .   # 已经装过 kstone 可跳过
 
 ## 上手
 
-不接机器人，直接求 IK。配置文件指定 URDF 和要用的模块，这里 `arm` 是 `joint_target` 模块，`tool` 是 `frame_task` 模块：
+不接机器人，直接求 IK。配置文件指定 URDF 和要用的模块，这里 `arm` 是 `joint_target` 模块，`tool` 是 `frame_target` 模块：
 
 ```python
 import kstone
@@ -103,7 +103,7 @@ print(q[solver.model.q_index("j1")])  # 接近 0.5
 ```python
 engine = kstone.load_engine("tests/fixtures/arm_loopback.yaml")
 engine.module("arm").write_port("target", [0.5, -0.3, 0.2])
-engine.run(duration_s=3.0)  # 引擎时间 3 s；这份配置是 realtime: false，所以会立即返回
+engine.run(duration_s=3.0)  # 按真实时钟阻塞 3 s
 print(engine.stats["cycles"], engine.quality)
 ```
 

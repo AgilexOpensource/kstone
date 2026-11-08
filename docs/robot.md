@@ -32,7 +32,7 @@ C++ hosts can implement `RobotInterface` directly instead, see [C++ API](api.md)
 
 ## Real-time thread
 
-On Linux the control thread can use real-time scheduling. The settings apply when `run()` starts, and priority and affinity are restored when it returns.
+On Linux the control thread can use real-time scheduling. The settings apply when `run()` starts with `realtime: true`, and priority and affinity are restored when it returns. With `realtime: false` the `thread` block is ignored.
 
 ```yaml
 thread:
@@ -43,6 +43,7 @@ thread:
 
 - If the system refuses a setting (missing CAP_SYS_NICE, RLIMIT_RTPRIO or CAP_IPC_LOCK), the engine logs a warning and keeps running, as ros2_control_node does. Invalid values still fail at creation.
 - `lock_memory` calls `mlockall(MCL_CURRENT | MCL_FUTURE)`.
+- When realtime is in effect (`--realtime` or `realtime: true`), `kstone run` calls `elevate_thread_limits`: if `ulimit -r` is below `priority` (or `ulimit -l` is limited with `lock_memory`) and the capability is missing, it runs `sudo prlimit --pid <self>` once at startup, prompting for a password on the terminal. Only the limits are raised; the process does not run as root. Without a terminal, or if sudo fails, it warns and continues.
 - Calling `step()` directly is not affected.
 
 ## Run contract
@@ -54,7 +55,7 @@ thread:
 
 ## Debug server
 
-`kstone run --serve` starts the debug server, default `127.0.0.1:7311`. It streams telemetry and supports tuning parameters and taking a control lease.
+`kstone run --serve` starts the debug server, default `127.0.0.1:7311`. It streams telemetry and supports tuning and remote commands. One client at a time is the control source; ports your code writes keep priority over remote writes.
 
 - Binding to a non-loopback address requires a token of at least 16 bytes, from `--token-file` or `$KSTONE_TOKEN`.
 - The protocol is not encrypted and the token is sent in clear text. Across untrusted networks, use an SSH tunnel or a VPN.

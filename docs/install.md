@@ -102,7 +102,7 @@ Linking kstone into your own CMake project is described in [C++](cpp.md#using-ks
 `kstone doctor` (`--json` for JSON) or `kstone.doctor(print=True)` in Python reports:
 
 - The kstone version and build type, and the Eigen, Pinocchio and Coal versions it was compiled against.
-- The native libraries loaded in the process and their source (pypi, ros, system or other).
+- The shared libraries loaded in the process and their source (pypi, ros, system or other).
 - The result of a solve and collision-distance smoke test.
 
 The check fails if one library is loaded twice, or if Pinocchio and Coal come from different sources. The CLI then exits with 1, and the dict returned in Python has `ok` set to `False`. The loaded-library scan works on Linux only.

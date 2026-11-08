@@ -30,8 +30,8 @@ ModuleSet make_set(const ModelPtr& m) {
 
 PoseTrajectoryConfig pose_limits() {
     PoseTrajectoryConfig c;
-    c.translation = {0.3, 1.0, 0.0, 0.0, 10.0};
-    c.rotation = {1.0, 3.0, 0.0, 0.0, 20.0};
+    c.position = {0.3, 1.0, 0.0, 0.0, 10.0};
+    c.orientation = {1.0, 3.0, 0.0, 0.0, 20.0};
     return c;
 }
 
@@ -60,15 +60,15 @@ void step(ModuleSet& set, Eigen::VectorXd& q, double& now, int n = 1) {
 
 TEST_CASE("tune: schema patch is all-or-nothing and only touches tunable keys") {
     const auto r = ModuleRegistry::with_builtins();
-    const std::string json = to_json(*r.schema("frame_task"));
+    const std::string json = to_json(*r.schema("frame_target"));
     CHECK(json.find("\"tunable\": true") != std::string::npos);
 
     ModelPtr m = load("arm.urdf");
     ModuleSet set = make_set(m);
-    FrameTaskModuleConfig c;
+    FrameTargetModuleConfig c;
     c.frame = "tool";
     c.trajectory = pose_limits();
-    auto ft = std::make_shared<FrameTaskModule>("tool", c);
+    auto ft = std::make_shared<FrameTargetModule>("tool", c);
     CHECK(ft->homeable());
     CHECK_FALSE(ft->tune(ConfigNode::map({{"gain", 0.5}})));  // not configured
     REQUIRE(set.add(ft));
@@ -76,14 +76,14 @@ TEST_CASE("tune: schema patch is all-or-nothing and only touches tunable keys") 
 
     Status ok = ft->tune(ConfigNode::map(
         {{"gain", 0.5},
-         {"trajectory", ConfigNode::map({{"translation", ConfigNode::map({{"velocity", 0.2}})}})}}));
+         {"trajectory", ConfigNode::map({{"position", ConfigNode::map({{"velocity", 0.2}})}})}}));
     REQUIRE_MESSAGE(ok, message(ok));
     CHECK(ft->task()->gain() == doctest::Approx(0.5));
-    CHECK(number(ft->tunables(), {"trajectory", "translation", "velocity"}) == doctest::Approx(0.2));
-    CHECK(number(ft->tunables(), {"trajectory", "translation", "acceleration"}) == doctest::Approx(1.0));
+    CHECK(number(ft->tunables(), {"trajectory", "position", "velocity"}) == doctest::Approx(0.2));
+    CHECK(number(ft->tunables(), {"trajectory", "position", "acceleration"}) == doctest::Approx(1.0));
     const ConfigNode values = ft->tunables();
     CHECK(number(values, {"gain"}) == doctest::Approx(0.5));
-    CHECK(number(values, {"trajectory", "translation", "velocity"}) == doctest::Approx(0.2));
+    CHECK(number(values, {"trajectory", "position", "velocity"}) == doctest::Approx(0.2));
     CHECK(values.find("frame") == nullptr);
 
     // Defaults in tune_schema come from the construction config, not the tuned one.
@@ -97,24 +97,24 @@ TEST_CASE("tune: schema patch is all-or-nothing and only touches tunable keys") 
         REQUIRE_FALSE(s);
         CHECK(s.error().message.find(to_string(diag)) != std::string::npos);
         CHECK(ft->task()->gain() == doctest::Approx(0.5));
-        CHECK(number(ft->tunables(), {"trajectory", "translation", "velocity"}) == doctest::Approx(0.2));
+        CHECK(number(ft->tunables(), {"trajectory", "position", "velocity"}) == doctest::Approx(0.2));
     };
     rejected(ConfigNode::map({{"gain", 0.9}, {"frame", "base_link"}}), ConfigDiag::not_tunable);
     rejected(ConfigNode::map({{"gain", 0.9}, {"nope", 1.0}}), ConfigDiag::unknown_key);
     rejected(ConfigNode::map({{"gain", 0.9}, {"weight", -1.0}}), ConfigDiag::invalid_value);
     CHECK_FALSE(ft->tune(ConfigNode::list()));
     CHECK_FALSE(ft->tune(ConfigNode::map(
-        {{"trajectory", ConfigNode::map({{"translation", ConfigNode::map({{"velocity", -1.0}})}})}})));
-    CHECK(number(ft->tunables(), {"trajectory", "translation", "velocity"}) == doctest::Approx(0.2));
+        {{"trajectory", ConfigNode::map({{"position", ConfigNode::map({{"velocity", -1.0}})}})}})));
+    CHECK(number(ft->tunables(), {"trajectory", "position", "velocity"}) == doctest::Approx(0.2));
 }
 
-TEST_CASE("tune: frame_task and joint_target reject motion changes while homing") {
+TEST_CASE("tune: frame_target and joint_target reject motion changes while homing") {
     ModelPtr m = load("arm.urdf");
     ModuleSet set = make_set(m);
-    FrameTaskModuleConfig fc;
+    FrameTargetModuleConfig fc;
     fc.frame = "tool";
     fc.trajectory = pose_limits();
-    auto ft = std::make_shared<FrameTaskModule>("tool", fc);
+    auto ft = std::make_shared<FrameTargetModule>("tool", fc);
     JointTargetModuleConfig jc;
     jc.joints = {"j1"};
     auto jt = std::make_shared<JointTargetModule>("j1", jc);
@@ -154,28 +154,28 @@ TEST_CASE("tune: frame_task and joint_target reject motion changes while homing"
     CHECK(jt->tune(ConfigNode::map({{"home_motion", ConfigNode::map({{"timeout_s", 3.0}})}})));
     CHECK_FALSE(jt->tune(ConfigNode::map({{"home_motion", ConfigNode::map({{"timeout_s", 0.0}})}})));
     CHECK_FALSE(jt->tune(ConfigNode::map({{"joints", ConfigNode::list({"j2"})}})));
-    CHECK_FALSE(jt->tune(ConfigNode::map({{"tolerance", 0.0}})));
+    CHECK_FALSE(jt->tune(ConfigNode::map({{"position_tolerance", 0.0}})));
     step(set, q, now, 5);
 }
 
-TEST_CASE("tune: center_of_mass, null_space_preference and world_collision apply to their constraints") {
+TEST_CASE("tune: center_of_mass, null_space and world_collision apply to their constraints") {
     ModelPtr m = load("arm.urdf");
     ModuleSet set = make_set(m);
-    FrameTaskModuleConfig fc;
+    FrameTargetModuleConfig fc;
     fc.frame = "tool";
     fc.joints = {"j1", "j2"};
     fc.trajectory = pose_limits();
     fc.task.level = 0;
-    auto ft = std::make_shared<FrameTaskModule>("tool", fc);
+    auto ft = std::make_shared<FrameTargetModule>("tool", fc);
     CenterOfMassModuleConfig cc;
     cc.frame = "base_link";
     cc.polygon = {Eigen::Vector2d(-1, -1), Eigen::Vector2d(1, -1), Eigen::Vector2d(1, 1),
                   Eigen::Vector2d(-1, 1)};
     cc.recovery_tasks = {ft};
     auto com = std::make_shared<CenterOfMassModule>("com", cc);
-    NullSpacePreferenceModuleConfig nc;
+    NullSpaceModuleConfig nc;
     nc.primary = ft;
-    auto ns = std::make_shared<NullSpacePreferenceModule>("ns", nc);
+    auto ns = std::make_shared<NullSpaceModule>("ns", nc);
     CHECK_FALSE(com->homeable());
     REQUIRE(set.add(ft));
     REQUIRE(set.add(com));
@@ -219,9 +219,9 @@ TEST_CASE("tune: center_of_mass, null_space_preference and world_collision apply
     auto col = std::make_shared<WorldCollisionModule>("collision", sc);
     REQUIRE(cset.add(col));
     REQUIRE(cset.configure());
-    ok = col->tune(ConfigNode::map({{"constraint", ConfigNode::map({{"d_min", 0.05}})}}));
+    ok = col->tune(ConfigNode::map({{"constraint", ConfigNode::map({{"clearance", 0.05}})}}));
     REQUIRE_MESSAGE(ok, message(ok));
-    CHECK(col->constraint()->options().d_min == doctest::Approx(0.05));
+    CHECK(col->constraint()->options().clearance == doctest::Approx(0.05));
     Status rows = col->tune(ConfigNode::map({{"constraint", ConfigNode::map({{"max_rows", 4}})}}));
     REQUIRE_FALSE(rows);
     CHECK(rows.error().message.find(to_string(ConfigDiag::not_tunable)) != std::string::npos);
@@ -231,19 +231,19 @@ TEST_CASE("tune: center_of_mass, null_space_preference and world_collision apply
     CHECK(col->constraint()->options().max_rows == 16);
 }
 
-TEST_CASE("tune: null_space_preference posture reference, values and reseed") {
+TEST_CASE("tune: null_space posture reference, values and reseed") {
     ModelPtr m = load("arm.urdf");
     ModuleSet set = make_set(m);
-    FrameTaskModuleConfig fc;
+    FrameTargetModuleConfig fc;
     fc.frame = "tool";
     fc.joints = {"j1", "j2"};
     fc.trajectory = pose_limits();
     fc.task.level = 0;
-    auto ft = std::make_shared<FrameTaskModule>("tool", fc);
-    NullSpacePreferenceModuleConfig nc;
+    auto ft = std::make_shared<FrameTargetModule>("tool", fc);
+    NullSpaceModuleConfig nc;
     nc.primary = ft;
     nc.posture_values = {{"j2", 0.4}};
-    auto ns = std::make_shared<NullSpacePreferenceModule>("ns", nc);
+    auto ns = std::make_shared<NullSpaceModule>("ns", nc);
     REQUIRE(set.add(ft));
     REQUIRE(set.add(ns));
     Status ok = set.configure();
@@ -309,14 +309,14 @@ TEST_CASE("tune: null_space_preference posture reference, values and reseed") {
 
     nc.reseed_current = true;
     ModuleSet bad = make_set(m);
-    auto ft2 = std::make_shared<FrameTaskModule>("tool", fc);
+    auto ft2 = std::make_shared<FrameTargetModule>("tool", fc);
     nc.primary = ft2;
     REQUIRE(bad.add(ft2));
-    REQUIRE(bad.add(std::make_shared<NullSpacePreferenceModule>("ns", nc)));
+    REQUIRE(bad.add(std::make_shared<NullSpaceModule>("ns", nc)));
     CHECK_FALSE(bad.configure());
 }
 
-TEST_CASE("tune: null_space_preference neutral clamp and custom switch seeding") {
+TEST_CASE("tune: null_space neutral clamp and custom switch seeding") {
     ModelPtr base = load("arm.urdf");
     JointLimitOverride narrow;
     narrow.joint = "j2";
@@ -327,15 +327,15 @@ TEST_CASE("tune: null_space_preference neutral clamp and custom switch seeding")
     ModelPtr m = *narrowed;
     const Eigen::Index i1 = m->joints()[*m->joint_id("j1")].idx_q, i2 = m->joints()[*m->joint_id("j2")].idx_q;
 
-    auto build = [&](ModuleSet& set, NullSpacePreferenceModuleConfig nc) {
-        FrameTaskModuleConfig fc;
+    auto build = [&](ModuleSet& set, NullSpaceModuleConfig nc) {
+        FrameTargetModuleConfig fc;
         fc.frame = "tool";
         fc.joints = {"j1", "j2"};
         fc.trajectory = pose_limits();
         fc.task.level = 0;
-        auto ft = std::make_shared<FrameTaskModule>("tool", fc);
+        auto ft = std::make_shared<FrameTargetModule>("tool", fc);
         nc.primary = ft;
-        auto ns = std::make_shared<NullSpacePreferenceModule>("ns", nc);
+        auto ns = std::make_shared<NullSpaceModule>("ns", nc);
         REQUIRE(set.add(ft));
         REQUIRE(set.add(ns));
         Eigen::VectorXd init = m->neutral();
@@ -348,7 +348,7 @@ TEST_CASE("tune: null_space_preference neutral clamp and custom switch seeding")
 
     // Neutral follows the model limits (narrowed by yaml) and runtime joint_limits tuning.
     ModuleSet set = make_set(m);
-    NullSpacePreferenceModuleConfig nc;
+    NullSpaceModuleConfig nc;
     nc.reference = PostureReference::neutral;
     auto ns = build(set, nc);
     CHECK(ns->posture_task()->target()[i1] == doctest::Approx(0.0));

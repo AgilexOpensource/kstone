@@ -2,7 +2,7 @@
 
 [English](../../modules/self_collision.md) · [模块总览](README.md)
 
-在机器人自身几何体之间加距离约束，让每对几何体至少相距 `d_min`。只加约束，不驱动、不占有关节。
+在机器人自身几何体之间加距离约束，让每对几何体至少相距 `clearance`。只加约束，不驱动、不占有关节。
 
 ## 关键参数
 
@@ -15,14 +15,14 @@
 
 ### constraint
 
-- `d_min`：保持的最小距离（m），默认 0.03。
-- `gain`：每高出 `d_min` 1 m 允许的接近速度（1/s），默认 50。约束行为 $\dot d \ge -\text{gain}\,(d - d_{min})$。
-- `activation_margin`：距离小于 `d_min + activation_margin` 的几何对才加约束行，默认 0.05。`hysteresis`：已激活的几何对再远这么多才退出，默认 0.005。
-- `approach_deceleration`：制动减速度（m/s²），接近速度不超过 $\sqrt{2a(d - d_{min})}$，且每步不超过剩余间隙的一半。默认 5，0 = 关闭。
+- `clearance`：保持的最小距离（m），默认 0.03。
+- `gain`：每高出 `clearance` 1 m 允许的接近速度（1/s），默认 50。约束行为 $\dot d \ge -\text{gain}\,(d - \text{clearance})$。
+- `activation_margin`：距离小于 `clearance + activation_margin` 的几何对才加约束行，默认 0.05。`hysteresis`：已激活的几何对再远这么多才退出，默认 0.005。
+- `approach_deceleration`：制动减速度（m/s²），接近速度不超过 $\sqrt{2a(d - \text{clearance})}$，且每步不超过剩余间隙的一半。默认 5，0 = 关闭。
 - `max_rows`：固定行数，近的几何对优先，默认 16。超出的几何对被丢弃，从最远的开始。
 - `max_cuts`：切平面的额外行数，默认 8，0 = 关闭。步末有几何对低于下限时，在该步末端重新线性化再解一次，弥补滑动、转动这类弯曲运动在起点线性化下的误差。
 - `clip_slack`：步末裁剪的下限放宽量（m），默认 0。放宽后小步可以跳过检查，但可能加深穿透。
-- `exempt_penetrating`：默认 true，进入激活带时已经穿透的几何对在离开 `d_min` 之前不加约束，可以退出也可以更深。false 时按普通几何对往外推，起始穿透较深时可能推不出来。
+- `exempt_penetrating`：默认 true，进入激活带时已经穿透的几何对在离开 `clearance` 之前不加约束，可以退出也可以更深。false 时按普通几何对往外推，起始穿透较深时可能推不出来。
 
 ## 示例
 
@@ -37,12 +37,12 @@ self_collision:
     - [head_base_link, head_yaw_link]
     - [left_gripper_base, right_gripper_base]  # 双臂协作时允许夹爪靠近
   closed_loop: true
-  constraint: {d_min: 0.002, activation_margin: 0.01, hysteresis: 0.005, gain: 1.5, approach_deceleration: 20}
+  constraint: {clearance: 0.002, activation_margin: 0.01, hysteresis: 0.005, gain: 1.5, approach_deceleration: 20}
 ```
 
 ```python
 sc = e.module("self_collision")
-sc.tune({"constraint": {"d_min": 0.01}})
+sc.tune({"constraint": {"clearance": 0.01}})
 print(sc.outputs(e.q)["min_distance"])
 ```
 

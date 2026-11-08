@@ -1,4 +1,4 @@
-# Python package `kstone` (native part `kstone._core`); needs pybind11 (pip install pybind11, then -Dpybind11_DIR=$(python -m pybind11 --cmakedir)).
+# Python package `kstone` (compiled part `kstone._core`); needs pybind11 (pip install pybind11, then -Dpybind11_DIR=$(python -m pybind11 --cmakedir)).
 find_package(Python 3.8 REQUIRED COMPONENTS Interpreter Development.Module)
 find_package(pybind11 2.10 CONFIG REQUIRED)
 

@@ -309,7 +309,7 @@ TEST_CASE("collision constraint: rows, hysteresis and dropped candidates") {
     bad.max_cuts = -1;
     CHECK_FALSE(CollisionConstraint::create(c, world, bad));
 
-    CollisionConstraintOptions o;  // d_min .03, hysteresis .005
+    CollisionConstraintOptions o;  // clearance .03, hysteresis .005
     o.gain = 1.0;
     o.activation_margin = 0.01;
     o.approach_deceleration = 0.0;
@@ -331,7 +331,7 @@ TEST_CASE("collision constraint: rows, hysteresis and dropped candidates") {
     CHECK(std::isinf(r.lo[0]));
     CHECK(con->report().nearest.distance == doctest::Approx(0.043).epsilon(1e-9));
 
-    // d = 0.04 -> active: J v >= -gain (d - d_min) = -0.01.
+    // d = 0.04 -> active: J v >= -gain (d - clearance) = -0.01.
     REQUIRE(ws.update(slider_q(0.26)));
     r = evaluate(*con, ws, dt);
     CHECK(con->report().candidates == 1);
@@ -377,7 +377,7 @@ TEST_CASE("collision constraint: rows, hysteresis and dropped candidates") {
     CHECK(r.A(1, 0) == doctest::Approx(1.0));             // b2 is behind: moving +x opens the gap
 }
 
-TEST_CASE("collision constraint: closed loop keeps d_min from a moving obstacle") {
+TEST_CASE("collision constraint: closed loop keeps clearance from a moving obstacle") {
     ModelPtr m = load("slider_collision.urdf");
     CollisionModelPtr c = robot_geometry(m, "slider_collision.urdf");
     auto world = std::make_shared<CollisionWorld>();
@@ -412,8 +412,8 @@ TEST_CASE("collision constraint: closed loop keeps d_min from a moving obstacle"
     }
     // The constraint is linearized at the start of the step while the ball also moves within it,
     // so allow the ball's own displacement per step (<= 0.45 * dt).
-    CHECK(min_distance >= o.d_min - 0.0045 - 1e-9);
-    CHECK(min_distance < o.d_min + o.activation_margin);  // the constraint was actually engaged
+    CHECK(min_distance >= o.clearance - 0.0045 - 1e-9);
+    CHECK(min_distance < o.clearance + o.activation_margin);  // the constraint was actually engaged
     MESSAGE("closed loop min distance " << min_distance);
 }
 
@@ -445,7 +445,7 @@ TEST_CASE("collision constraint: obstacle velocity feed-forward keeps a fast obs
                 REQUIRE(world->set_velocity(*ball, Eigen::Vector3d(-speed, 0, 0), Eigen::Vector3d::Zero()));
             REQUIRE(solver->solve(q, dt, result));
             q = result.q_next;
-            min_margin = std::min(min_margin, (x - speed * dt - q[0]) - 0.2 - o.d_min);
+            min_margin = std::min(min_margin, (x - speed * dt - q[0]) - 0.2 - o.clearance);
         }
         return min_margin;
     };
@@ -499,7 +499,7 @@ TEST_CASE("collision constraint: a push-out beyond the velocity limit still reco
         REQUIRE_MESSAGE(s, (s ? "" : s.error().message) << " at step " << step);
     }
     const double d = (0.3 - result.q_next[0]) - 0.2;
-    CHECK(d == doctest::Approx(o.d_min).epsilon(1e-3));
+    CHECK(d == doctest::Approx(o.clearance).epsilon(1e-3));
     CHECK_FALSE(result.held);
 }
 
@@ -539,9 +539,9 @@ TEST_CASE("collision constraint: a pair penetrating on the first step is free un
     const double out = s.run(0.0);
     CHECK(s.con->report().exempt == 0);
     CHECK(out == doctest::Approx(0.0).epsilon(1e-3));
-    // Clear again, so moving back in stops at d_min.
+    // Clear again, so moving back in stops at clearance.
     const double back = s.run(0.3);
-    CHECK((0.3 - back) - 0.2 == doctest::Approx(s.con->options().d_min).epsilon(1e-2));
+    CHECK((0.3 - back) - 0.2 == doctest::Approx(s.con->options().clearance).epsilon(1e-2));
 }
 
 TEST_CASE("collision constraint: an exempt pair is not pushed out") {
@@ -559,12 +559,12 @@ TEST_CASE("collision constraint: enabling an obstacle around the body exempts it
     REQUIRE(s.world->set_enabled(s.ball, true));
     CHECK(s.run(0.15, 5) == doctest::Approx(0.15));
     CHECK(s.con->report().exempt == 1);
-    // Tracked from outside: approaching stops at d_min, nothing is exempt.
+    // Tracked from outside: approaching stops at clearance, nothing is exempt.
     s.run(0.0);
     s.run(0.3);
     CHECK(s.con->report().exempt == 0);
-    CHECK((0.3 - s.q[0]) - 0.2 == doctest::Approx(s.con->options().d_min).epsilon(1e-2));
-    // reset_tracking with the pair inside d_min but not penetrating: still constrained.
+    CHECK((0.3 - s.q[0]) - 0.2 == doctest::Approx(s.con->options().clearance).epsilon(1e-2));
+    // reset_tracking with the pair inside clearance but not penetrating: still constrained.
     s.con->reset_tracking();
     s.run(0.3, 5);
     CHECK(s.con->report().exempt == 0);
@@ -577,7 +577,7 @@ TEST_CASE("collision constraint: exempt_penetrating false pushes a first-step pe
     REQUIRE(s.con->set_options(o));
     s.run(0.15);
     CHECK(s.con->report().exempt == 0);
-    CHECK((0.3 - s.q[0]) - 0.2 == doctest::Approx(o.d_min).epsilon(1e-2));
+    CHECK((0.3 - s.q[0]) - 0.2 == doctest::Approx(o.clearance).epsilon(1e-2));
 }
 
 namespace {
@@ -682,7 +682,7 @@ TEST_CASE("collision query: a reused query along a path matches fresh ones") {
     CHECK(close > 20);
 }
 
-TEST_CASE("collision constraint: cutting planes keep a rotating box at d_min") {
+TEST_CASE("collision constraint: cutting planes keep a rotating box at clearance") {
     ModelPtr m = load("arm.urdf");
     CollisionModelPtr c = arm_boxes(m);
     const auto run = [&](Index max_cuts, Index& cut_steps, Eigen::Vector3d bp, Eigen::Vector4d t1,
@@ -690,7 +690,7 @@ TEST_CASE("collision constraint: cutting planes keep a rotating box at d_min") {
         auto world = std::make_shared<CollisionWorld>();
         REQUIRE(world->add("block", Shape::box(0.2, 0.2, 0.2), at(bp.x(), bp.y(), bp.z())));
         CollisionConstraintOptions o;
-        o.d_min = 0.002;
+        o.clearance = 0.002;
         o.gain = 1.5;
         o.activation_margin = 0.01;
         o.approach_deceleration = 20.0;
@@ -745,7 +745,7 @@ struct ClipRun {
 ClipRun clip_run(const ModelPtr& m, const CollisionModelPtr& c, double spread, double clip_slack,
                  double floor_slack) {
     CollisionConstraintOptions o;
-    o.d_min = 0.002;
+    o.clearance = 0.002;
     o.gain = 1.5;
     o.activation_margin = 0.01;
     o.approach_deceleration = 20.0;
@@ -797,7 +797,7 @@ ClipRun clip_run(const ModelPtr& m, const CollisionModelPtr& c, double spread, d
             REQUIRE(ws.update(q));
             REQUIRE(query.update(ws, 0.0));
             const double d = query.nearest().distance;
-            const double floor = std::min(prev, o.d_min) - floor_slack;
+            const double floor = std::min(prev, o.clearance) - floor_slack;
             if (d < floor - 1e-6) {
                 ++r.violations;
                 r.worst = std::max(r.worst, floor - d);
@@ -840,7 +840,7 @@ TEST_CASE("collision constraint: a pair entering from beyond the query range sti
     REQUIRE(world->add("block", Shape::box(0.1, 0.1, 0.1),
                        at(tool.translation().x(), tool.translation().y(), tool.translation().z())));
     CollisionConstraintOptions o;
-    o.d_min = 0.002;
+    o.clearance = 0.002;
     o.activation_margin = 0.01;
     o.max_cuts = 0;
     auto con = CollisionConstraint::create(c, world, o);
@@ -864,7 +864,7 @@ TEST_CASE("collision constraint: a pair entering from beyond the query range sti
     CHECK(result.step_scale < 1.0);
     REQUIRE(ws.update(result.q_next));
     REQUIRE(query.update(ws, 0.0));
-    CHECK(query.nearest().distance >= o.d_min - 1e-9);
+    CHECK(query.nearest().distance >= o.clearance - 1e-9);
 }
 
 TEST_CASE("collision constraint: far steps skip the endpoint clip") {

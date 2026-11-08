@@ -124,37 +124,43 @@ MotionLimits scaled(MotionLimits m, double s) {
 
 }  // namespace
 
-// ---- frame_task --------------------------------------------------------------------------------------
+// ---- frame_target --------------------------------------------------------------------------------------
 
-FrameTaskModule::FrameTaskModule(std::string id, FrameTaskModuleConfig config)
+FrameTargetModule::FrameTargetModule(std::string id, FrameTargetModuleConfig config)
     : Module(std::move(id)), config_(std::move(config)), defaults_(config_) {}
 
-Status FrameTaskModule::set_target(const Eigen::Isometry3d& target) {
+Status FrameTargetModule::set_target(const Eigen::Isometry3d& target) {
+    Status s = apply_target(target);
+    if (s) mark_written(0);
+    return s;
+}
+
+Status FrameTargetModule::apply_target(const Eigen::Isometry3d& target) {
     if (!rigid(target))
-        return make_error(ErrorCode::invalid_argument, "frame_task '" + id() + "': target is not rigid");
+        return make_error(ErrorCode::invalid_argument, "frame_target '" + id() + "': target is not rigid");
     if (Status s = check_unlocked(); !s) return s;
     if (home_.active())
-        return make_error(ErrorCode::invalid_argument, "frame_task '" + id() + "': homing in progress");
+        return make_error(ErrorCode::invalid_argument, "frame_target '" + id() + "': homing in progress");
     target_ = target;
     has_target_ = true;
     request_control();
     return {};
 }
 
-Status FrameTaskModule::read_port(std::size_t index, PortValue& out) const {
+Status FrameTargetModule::read_port(std::size_t index, PortValue& out) const {
     if (index != 0) return Module::read_port(index, out);
     out.pose = target_;
     return {};
 }
 
-Status FrameTaskModule::write_port(std::size_t index, const PortValue& value) {
-    if (index != 0) return Module::write_port(index, value);
-    return set_target(value.pose);
+Status FrameTargetModule::on_write_port(std::size_t index, const PortValue& value) {
+    if (index != 0) return Module::on_write_port(index, value);
+    return apply_target(value.pose);
 }
 
-Status FrameTaskModule::request_home() {
-    if (!task_) return make_error(ErrorCode::invalid_argument, "frame_task '" + id() + "': not configured");
-    if (!enabled()) return make_error(ErrorCode::invalid_argument, "frame_task '" + id() + "': disabled");
+Status FrameTargetModule::request_home() {
+    if (!task_) return make_error(ErrorCode::invalid_argument, "frame_target '" + id() + "': not configured");
+    if (!enabled()) return make_error(ErrorCode::invalid_argument, "frame_target '" + id() + "': disabled");
     if (Status s = check_unlocked(); !s) return s;
     home_.request();
     request_control();
@@ -162,7 +168,7 @@ Status FrameTaskModule::request_home() {
 }
 
 namespace {
-Status apply_cost(FrameTask& task, const FrameTaskModuleConfig& c) {
+Status apply_cost(FrameTask& task, const FrameTargetModuleConfig& c) {
     Eigen::Matrix<double, 6, 1> w;
     w << c.weight * c.position_weight, c.weight * c.orientation_weight;
     if (Status s = task.set_weight(w); !s) return s;
@@ -171,14 +177,14 @@ Status apply_cost(FrameTask& task, const FrameTaskModuleConfig& c) {
 }
 }  // namespace
 
-Status FrameTaskModule::tune(const ConfigNode& params) {
-    const std::string who = "frame_task '" + id() + "'";
+Status FrameTargetModule::tune(const ConfigNode& params) {
+    const std::string who = "frame_target '" + id() + "'";
     if (!task_) return not_configured(who);
     if (home_.active() && touches_motion(params))
         return make_error(ErrorCode::invalid_argument,
                           who + ": trajectory and home_motion cannot change while homing");
-    FrameTaskModuleConfig next = config_;
-    if (Status s = builtin_schemas::frame_task().patch(params, next); !s) return s;
+    FrameTargetModuleConfig next = config_;
+    if (Status s = builtin_schemas::frame_target().patch(params, next); !s) return s;
     if (Status s = next.trajectory.validate(); !s) return with_who(s, who);
     if (Status s = Homing::validate(next.home_motion); !s) return with_who(s, who);
     if (!finite_positive(next.position_tolerance) || !finite_positive(next.orientation_tolerance))
@@ -186,8 +192,8 @@ Status FrameTaskModule::tune(const ConfigNode& params) {
     if (next.locked && next.joints.empty())
         return make_error(ErrorCode::invalid_argument, who + ": locking requires explicit joints");
     PoseTrajectoryConfig home = next.trajectory;
-    home.translation = scaled(next.trajectory.translation, next.home_motion.velocity_scale);
-    home.rotation = scaled(next.trajectory.rotation, next.home_motion.velocity_scale);
+    home.position = scaled(next.trajectory.position, next.home_motion.velocity_scale);
+    home.orientation = scaled(next.trajectory.orientation, next.home_motion.velocity_scale);
     if (Status s = home.validate(); !s) return with_who(s, who);
 
     if (Status s = apply_cost(*task_, next); !s) return s;
@@ -199,12 +205,12 @@ Status FrameTaskModule::tune(const ConfigNode& params) {
     return {};
 }
 
-ConfigNode FrameTaskModule::tunables() const { return builtin_schemas::frame_task().values(config_); }
-ConfigNode FrameTaskModule::tune_schema() const {
-    return builtin_schemas::frame_task().tune_schema(defaults_);
+ConfigNode FrameTargetModule::tunables() const { return builtin_schemas::frame_target().values(config_); }
+ConfigNode FrameTargetModule::tune_schema() const {
+    return builtin_schemas::frame_target().tune_schema(defaults_);
 }
 
-Status FrameTaskModule::finish(HomeStatus status) {
+Status FrameTargetModule::finish(HomeStatus status) {
     home_.finish(status);
     if (Status s = trajectory_->tune(config_.trajectory); !s) return s;
     if (status != HomeStatus::succeeded && trajectory_->initialized()) target_ = trajectory_->ramp_pose();
@@ -212,7 +218,7 @@ Status FrameTaskModule::finish(HomeStatus status) {
     return {};
 }
 
-Status FrameTaskModule::prepare(Cycle& cycle) {
+Status FrameTargetModule::prepare(Cycle& cycle) {
     if (home_.update(cycle))
         if (Status s = finish(home_.status()); !s) return s;
     // Held without a target (e.g. since start): the port follows the observed pose; a running idle task holds its own.
@@ -224,16 +230,16 @@ Status FrameTaskModule::prepare(Cycle& cycle) {
     return {};
 }
 
-Claim FrameTaskModule::claim() const {
+Claim FrameTargetModule::claim() const {
     if (home_.active()) return home_.claim(driven_);
     return {nullptr, 0, config_.on_held};
 }
 
-Status FrameTaskModule::on_disabled(const Cycle&) {
+Status FrameTargetModule::on_disabled(const Cycle&) {
     return home_.active() ? finish(HomeStatus::aborted) : Status{};
 }
 
-Status FrameTaskModule::on_preempted(const Cycle&, const std::string&) {
+Status FrameTargetModule::on_preempted(const Cycle&, const std::string&) {
     if (home_.active())
         if (Status s = finish(HomeStatus::aborted); !s) return s;
     // Idle: the next reset() holds the pose observed then.
@@ -241,7 +247,7 @@ Status FrameTaskModule::on_preempted(const Cycle&, const std::string&) {
     return {};
 }
 
-Status FrameTaskModule::configure(ModuleSetup& setup) {
+Status FrameTargetModule::configure(ModuleSetup& setup) {
     const Model& model = *setup.model();
     model_ = &model;
     Result<FrameId> frame = model.frame_id(config_.frame);
@@ -261,7 +267,7 @@ Status FrameTaskModule::configure(ModuleSetup& setup) {
     } else if (Status s = velocity_mask_of(model, config_.joints, driven); !s) {
         return s;
     }
-    const std::string who = "frame_task '" + id() + "'";
+    const std::string who = "frame_target '" + id() + "'";
     if (!config_.joints.empty()) {
         const JointId fj = model.frames()[frame_].parent_joint;
         const JointId rj = has_reference_ ? model.frames()[reference_].parent_joint : JointId{0};
@@ -285,8 +291,8 @@ Status FrameTaskModule::configure(ModuleSetup& setup) {
     if (!trajectory) return std::move(trajectory).error();
     trajectory_.emplace(std::move(*trajectory));
     home_trajectory_ = config_.trajectory;
-    home_trajectory_.translation = scaled(config_.trajectory.translation, config_.home_motion.velocity_scale);
-    home_trajectory_.rotation = scaled(config_.trajectory.rotation, config_.home_motion.velocity_scale);
+    home_trajectory_.position = scaled(config_.trajectory.position, config_.home_motion.velocity_scale);
+    home_trajectory_.orientation = scaled(config_.trajectory.orientation, config_.home_motion.velocity_scale);
     if (Status s = home_trajectory_.validate(); !s) return s;
     // Reads before the first step report the initial pose, not identity.
     Workspace at_initial(setup.model());
@@ -319,20 +325,21 @@ Status FrameTaskModule::configure(ModuleSetup& setup) {
     PortInfo port;
     port.name = "target";
     port.type = PortType::pose;
+    port.api_priority = true;
     port.frame = config_.frame;
     port.reference = config_.reference;
     declare_port(std::move(port));
     declare_output({"planned", OutputType::point});
     declare_output({"lag", OutputType::number, 0, OutputRole::value, "m"});
-    declare_output({"speed", OutputType::number, 0, OutputRole::value, "m/s"});
+    declare_output({"linear_speed", OutputType::number, 0, OutputRole::value, "m/s"});
     declare_output({"angular_speed", OutputType::number, 0, OutputRole::value, "rad/s"});
-    declare_output({"error", OutputType::number, 0, OutputRole::value, "m"});
-    declare_output({"angular_error", OutputType::number, 0, OutputRole::value, "rad"});
+    declare_output({"position_error", OutputType::number, 0, OutputRole::value, "m"});
+    declare_output({"orientation_error", OutputType::number, 0, OutputRole::value, "rad"});
     driven_ = driven;
     return setup.set_driven(std::move(driven));
 }
 
-Status FrameTaskModule::update_outputs(Workspace& at) {
+Status FrameTargetModule::update_outputs(Workspace& at) {
     Eigen::Isometry3d ramp;
     // A held task's ramp is frozen at preemption; reset() restarts it from the observed pose.
     if (running() && trajectory_ && trajectory_->initialized()) {
@@ -360,7 +367,7 @@ Status FrameTaskModule::update_outputs(Workspace& at) {
     return {};
 }
 
-Status FrameTaskModule::read_output(std::size_t index, OutputValue& out) const {
+Status FrameTargetModule::read_output(std::size_t index, OutputValue& out) const {
     switch (index) {
         case 0:
             out.points = planned_;
@@ -385,7 +392,7 @@ Status FrameTaskModule::read_output(std::size_t index, OutputValue& out) const {
     }
 }
 
-Status FrameTaskModule::observe(const Workspace& workspace, Eigen::Isometry3d& pose) const {
+Status FrameTargetModule::observe(const Workspace& workspace, Eigen::Isometry3d& pose) const {
     if (Status s = workspace.frame_pose(frame_, pose); !s) return s;
     if (!has_reference_) return {};
     Eigen::Isometry3d ref;
@@ -394,7 +401,7 @@ Status FrameTaskModule::observe(const Workspace& workspace, Eigen::Isometry3d& p
     return {};
 }
 
-Status FrameTaskModule::reset(const Cycle& cycle) {
+Status FrameTargetModule::reset(const Cycle& cycle) {
     Eigen::Isometry3d observed;
     if (Status s = observe(cycle.workspace, observed); !s) return s;
     if (cycle.rebase || !has_target_) target_ = observed;
@@ -402,7 +409,7 @@ Status FrameTaskModule::reset(const Cycle& cycle) {
     return task_->set_target(observed);
 }
 
-Status FrameTaskModule::contribute(const Cycle& cycle) {
+Status FrameTargetModule::contribute(const Cycle& cycle) {
     Eigen::Isometry3d observed;
     if (Status s = observe(cycle.workspace, observed); !s) return s;
     Eigen::Isometry3d home = home_pose_;
@@ -452,8 +459,8 @@ Status JointTargetModule::configure(ModuleSetup& setup) {
     const std::string who = "joint_target '" + id() + "'";
     const auto n = static_cast<Index>(config_.joints.size());
     if (n == 0) return make_error(ErrorCode::invalid_argument, who + ": no joints");
-    if (!finite_positive(config_.tolerance))
-        return make_error(ErrorCode::invalid_argument, who + ": tolerance must be finite and > 0");
+    if (!finite_positive(config_.position_tolerance))
+        return make_error(ErrorCode::invalid_argument, who + ": position_tolerance must be finite and > 0");
     if (Status s = configure_home(home_, config_.home_motion, who); !s) return s;
     if (config_.home.size() != 0 && (config_.home.size() != n || !config_.home.allFinite()))
         return make_error(ErrorCode::invalid_argument, who + ": home needs one finite value per joint");
@@ -480,15 +487,15 @@ Status JointTargetModule::configure(ModuleSetup& setup) {
                                                                config_.joints[static_cast<std::size_t>(i)] +
                                                                " must be finite and > 0");
     // Same cap size in both configs, so switching copies without allocating.
-    if (config_.trajectory.velocity_cap.size() == 0)
-        config_.trajectory.velocity_cap.setConstant(n, std::numeric_limits<double>::infinity());
+    if (config_.trajectory.max_velocity.size() == 0)
+        config_.trajectory.max_velocity.setConstant(n, std::numeric_limits<double>::infinity());
     Result<JointTrajectory> trajectory = JointTrajectory::create(n, config_.trajectory, wrap_);
     if (!trajectory) return std::move(trajectory).error();
     trajectory_.emplace(std::move(*trajectory));
     home_trajectory_ = config_.trajectory;
     home_trajectory_.trigger = JointTrigger::continuous;
     home_trajectory_.velocity_scale = 1.0;
-    home_trajectory_.velocity_cap = config_.home_motion.velocity_scale * limit_;
+    home_trajectory_.max_velocity = config_.home_motion.velocity_scale * limit_;
     if (Status s = home_trajectory_.validate(n); !s) return s;
     home_pose_.resize(n);
     for (std::size_t i = 0; i < joints_.size(); ++i)
@@ -501,6 +508,10 @@ Status JointTargetModule::configure(ModuleSetup& setup) {
         target_[static_cast<Index>(i)] = scalar_position(joints_[i], setup.initial());
     measured_.setZero(n);
     measured_v_.setZero(n);
+    partial_.setZero(n);
+    seen_.assign(joints_.size(), false);
+    fill_.assign(joints_.size(), false);
+    filling_ = false;
     task_ = std::make_shared<JointTask>(config_.joints, target_);
     if (Status s = task_->set_weight(config_.weight); !s) return s;
     if (Status s = task_->set_mask(mask_); !s) return s;
@@ -515,6 +526,7 @@ Status JointTargetModule::configure(ModuleSetup& setup) {
     PortInfo port;
     port.name = "target";
     port.type = PortType::vector;
+    port.api_priority = true;
     port.labels = config_.joints;
     constexpr double inf = std::numeric_limits<double>::infinity();
     port.lower.setConstant(n, -inf);
@@ -535,18 +547,52 @@ Status JointTargetModule::read_port(std::size_t index, PortValue& out) const {
     return {};
 }
 
-Status JointTargetModule::write_port(std::size_t index, const PortValue& value) {
-    if (index != 0) return Module::write_port(index, value);
-    return set_target(value.vector);
+Status JointTargetModule::on_write_port(std::size_t index, const PortValue& value) {
+    if (index != 0) return Module::on_write_port(index, value);
+    return apply_target(value.vector);
 }
 
 Status JointTargetModule::set_target(const Eigen::Ref<const Eigen::VectorXd>& target) {
+    Status s = apply_target(target);
+    if (s) mark_written(0);
+    return s;
+}
+
+Status JointTargetModule::set_target(const std::vector<std::string>& joints,
+                                     const Eigen::Ref<const Eigen::VectorXd>& values) {
+    const std::string who = "joint_target '" + id() + "'";
+    if (!task_) return not_configured(who);
+    if (joints.empty() || static_cast<Index>(joints.size()) != values.size() || !values.allFinite())
+        return make_error(ErrorCode::invalid_argument, who + ": bad target");
+    partial_ = target_;
+    std::fill(seen_.begin(), seen_.end(), false);
+    for (std::size_t k = 0; k < joints.size(); ++k) {
+        const auto it = std::find(config_.joints.begin(), config_.joints.end(), joints[k]);
+        if (it == config_.joints.end())
+            return make_error(ErrorCode::invalid_argument, who + ": unknown joint " + joints[k]);
+        const auto i = static_cast<std::size_t>(it - config_.joints.begin());
+        if (seen_[i]) return make_error(ErrorCode::invalid_argument, who + ": duplicate joint " + joints[k]);
+        seen_[i] = true;
+        partial_[static_cast<Index>(i)] = values[static_cast<Index>(k)];
+    }
+    const bool was_filling = filling_;
+    if (Status s = set_target(partial_); !s) return s;
+    // Disabled or held: target_ is stale, so omitted joints hold where the robot is when it resumes.
+    if (!enabled() || !running()) {
+        for (std::size_t i = 0; i < seen_.size(); ++i) fill_[i] = !seen_[i] && (!was_filling || fill_[i]);
+        filling_ = true;
+    }
+    return {};
+}
+
+Status JointTargetModule::apply_target(const Eigen::Ref<const Eigen::VectorXd>& target) {
     if (target.size() != static_cast<Index>(joints_.size()) || !target.allFinite())
         return make_error(ErrorCode::invalid_argument, "joint_target '" + id() + "': bad target");
     if (Status s = check_unlocked(); !s) return s;
     if (home_.active())
         return make_error(ErrorCode::invalid_argument, "joint_target '" + id() + "': homing in progress");
     target_ = target;
+    filling_ = false;
     if (!ports().empty()) target_ = target_.cwiseMax(ports()[0].lower).cwiseMin(ports()[0].upper);
     has_target_ = true;
     claiming_ = true;
@@ -591,16 +637,16 @@ Status JointTargetModule::tune(const ConfigNode& params) {
     }
     if (Status s = builtin_schemas::joint_target().patch(patch, next); !s) return s;
     const auto n = static_cast<Index>(joints_.size());
-    if (next.trajectory.velocity_cap.size() == 0)
-        next.trajectory.velocity_cap.setConstant(n, std::numeric_limits<double>::infinity());
+    if (next.trajectory.max_velocity.size() == 0)
+        next.trajectory.max_velocity.setConstant(n, std::numeric_limits<double>::infinity());
     if (Status s = next.trajectory.validate(n); !s) return with_who(s, who);
     if (Status s = Homing::validate(next.home_motion); !s) return with_who(s, who);
-    if (!finite_positive(next.tolerance))
-        return make_error(ErrorCode::invalid_argument, who + ": tolerance must be finite and > 0");
+    if (!finite_positive(next.position_tolerance))
+        return make_error(ErrorCode::invalid_argument, who + ": position_tolerance must be finite and > 0");
     JointTrajectoryConfig home = next.trajectory;
     home.trigger = JointTrigger::continuous;
     home.velocity_scale = 1.0;
-    home.velocity_cap = next.home_motion.velocity_scale * limit_;
+    home.max_velocity = next.home_motion.velocity_scale * limit_;
     if (Status s = home.validate(n); !s) return with_who(s, who);
 
     if (Status s = task_->set_weight(next.weight); !s) return s;
@@ -649,7 +695,7 @@ bool JointTargetModule::arrived(const Eigen::VectorXd& goal) const {
         const auto k = static_cast<Index>(i);
         double e = goal[k] - measured_[k];
         if (wrap_[i]) e = std::remainder(e, 2.0 * M_PI);
-        if (std::abs(e) >= config_.tolerance) return false;
+        if (std::abs(e) >= config_.position_tolerance) return false;
     }
     return true;
 }
@@ -670,7 +716,7 @@ Status JointTargetModule::prepare(Cycle& cycle) {
         }
     }
     // Held with nothing pending: the port follows the joints, matching what reset() resumes from.
-    if (!running() && !home_.active() && (!has_target_ || (config_.claim_idle && !claiming_))) {
+    if (!running() && !home_.active() && (!has_target_ || (config_.on_idle == OnIdle::claim && !claiming_))) {
         measure(cycle);
         target_ = measured_;
     }
@@ -699,8 +745,8 @@ Status JointTargetModule::step_home(const Cycle& cycle) {
     if (!claiming_ || settled_ || (trajectory_->active() && !trajectory_->velocity().isZero(1e-9))) return {};
     measure(cycle);
     settled_ = arrived(target_);
-    // claim_idle keeps the joints anyway; idle again, it resumes from where they are.
-    if (settled_ && config_.claim_idle) claiming_ = false;
+    // on_idle claim keeps the joints anyway; idle again, it resumes from where they are.
+    if (settled_ && config_.on_idle == OnIdle::claim) claiming_ = false;
     return {};
 }
 
@@ -710,7 +756,7 @@ Claim JointTargetModule::claim() const {
 }
 
 bool JointTargetModule::holds_claim() const noexcept {
-    return claiming_ || (config_.claim_idle && !yielded_);
+    return claiming_ || (config_.on_idle == OnIdle::claim && !yielded_);
 }
 
 bool JointTargetModule::yield_control() {
@@ -740,8 +786,12 @@ Status JointTargetModule::on_preempted(const Cycle&, const std::string&) {
 
 Status JointTargetModule::reset(const Cycle& cycle) {
     measure(cycle);
-    // claim_idle resumes idle from where the joints are.
-    if (cycle.rebase || !has_target_ || (config_.claim_idle && !claiming_)) target_ = measured_;
+    // on_idle claim resumes idle from where the joints are.
+    if (cycle.rebase || !has_target_ || (config_.on_idle == OnIdle::claim && !claiming_)) target_ = measured_;
+    else if (filling_)
+        for (std::size_t i = 0; i < fill_.size(); ++i)
+            if (fill_[i]) target_[static_cast<Index>(i)] = measured_[static_cast<Index>(i)];
+    filling_ = false;
     trajectory_->reset();
     return task_->set_target(measured_);
 }
@@ -753,7 +803,7 @@ Status JointTargetModule::contribute(const Cycle& cycle) {
         target_ = home_pose_;
         has_target_ = true;
     }
-    const bool active = (config_.hold_idle && !yielded_) || holds_claim() || home_.active();
+    const bool active = (config_.on_idle != OnIdle::release && !yielded_) || holds_claim() || home_.active();
     set_task_active(handle_, active);
     if (!active) {
         target_ = measured_;
@@ -1023,18 +1073,17 @@ Status CenterOfMassModule::read_output(std::size_t index, OutputValue& out) cons
     return {};
 }
 
-// ---- null_space_preference ---------------------------------------------------------------------------
+// ---- null_space ---------------------------------------------------------------------------
 
-NullSpacePreferenceModule::NullSpacePreferenceModule(std::string id, NullSpacePreferenceModuleConfig config)
+NullSpaceModule::NullSpaceModule(std::string id, NullSpaceModuleConfig config)
     : Module(std::move(id)),
       config_(std::move(config)),
       defaults_(config_),
       preference_(config_.preference) {}
 
-Status NullSpacePreferenceModule::posture_target(const NullSpacePreferenceModuleConfig& c,
-                                                 Eigen::VectorXd& out) const {
+Status NullSpaceModule::posture_target(const NullSpaceModuleConfig& c, Eigen::VectorXd& out) const {
     const Model& model = *model_;
-    const std::string who = "null_space_preference '" + id() + "'";
+    const std::string who = "null_space '" + id() + "'";
     if (c.reference == PostureReference::current) {
         if (c.posture.size() != 0 || !c.posture_values.empty())
             return make_error(ErrorCode::invalid_argument,
@@ -1074,8 +1123,7 @@ Status NullSpacePreferenceModule::posture_target(const NullSpacePreferenceModule
 }
 
 // Neutral of the bounded joints not set by posture_values, clamped into the effective limits; allocation-free.
-void NullSpacePreferenceModule::clamp_neutral(const NullSpacePreferenceModuleConfig& c,
-                                              Eigen::VectorXd& out) const {
+void NullSpaceModule::clamp_neutral(const NullSpaceModuleConfig& c, Eigen::VectorXd& out) const {
     if (!lower_ || !upper_) return;
     for (const JointInfo& j : infos_) {
         if (j.nq != 1) continue;
@@ -1086,7 +1134,7 @@ void NullSpacePreferenceModule::clamp_neutral(const NullSpacePreferenceModuleCon
 }
 
 // Per module joint, the pre-switch q kept within the effective limits.
-Eigen::VectorXd NullSpacePreferenceModule::seed_from_q() const {
+Eigen::VectorXd NullSpaceModule::seed_from_q() const {
     const Eigen::VectorXd& q = have_q_ ? last_q_ : initial_;
     Eigen::VectorXd seed(static_cast<Index>(infos_.size()));
     for (std::size_t i = 0; i < infos_.size(); ++i) {
@@ -1098,12 +1146,12 @@ Eigen::VectorXd NullSpacePreferenceModule::seed_from_q() const {
     return seed;
 }
 
-Status NullSpacePreferenceModule::tune(const ConfigNode& params) {
-    const std::string who = "null_space_preference '" + id() + "'";
+Status NullSpaceModule::tune(const ConfigNode& params) {
+    const std::string who = "null_space '" + id() + "'";
     if (!posture_) return not_configured(who);
-    NullSpacePreferenceModuleConfig next = config_;
+    NullSpaceModuleConfig next = config_;
     next.preference = preference_;
-    if (Status s = builtin_schemas::null_space_preference().patch(params, next); !s) return s;
+    if (Status s = builtin_schemas::null_space().patch(params, next); !s) return s;
     // A reference alone: custom takes the configured posture, else the pre-switch q, then the configured values.
     if (params.find("reference")) {
         const bool custom = next.reference == PostureReference::custom;
@@ -1153,24 +1201,24 @@ Status NullSpacePreferenceModule::tune(const ConfigNode& params) {
     return {};
 }
 
-ConfigNode NullSpacePreferenceModule::tunables() const {
-    NullSpacePreferenceModuleConfig current = config_;
+ConfigNode NullSpaceModule::tunables() const {
+    NullSpaceModuleConfig current = config_;
     current.preference = preference_;
-    return builtin_schemas::null_space_preference().values(current);
+    return builtin_schemas::null_space().values(current);
 }
 
-ConfigNode NullSpacePreferenceModule::tune_schema() const {
-    return builtin_schemas::null_space_preference().tune_schema(defaults_);
+ConfigNode NullSpaceModule::tune_schema() const {
+    return builtin_schemas::null_space().tune_schema(defaults_);
 }
 
-std::vector<std::string> NullSpacePreferenceModule::dependencies() const {
+std::vector<std::string> NullSpaceModule::dependencies() const {
     if (!config_.primary) return {};
     return {config_.primary->id()};
 }
 
-Status NullSpacePreferenceModule::configure(ModuleSetup& setup) {
+Status NullSpaceModule::configure(ModuleSetup& setup) {
     const Model& model = *setup.model();
-    const std::string who = "null_space_preference '" + id() + "'";
+    const std::string who = "null_space '" + id() + "'";
     if (!config_.primary || !config_.primary->task())
         return make_error(ErrorCode::invalid_argument, who + ": primary is null or not configured");
     std::vector<std::string> joints = config_.joints;
@@ -1250,7 +1298,7 @@ Status NullSpacePreferenceModule::configure(ModuleSetup& setup) {
     return setup.set_driven(config_.primary->driven());
 }
 
-Status NullSpacePreferenceModule::contribute(const Cycle& cycle) {
+Status NullSpaceModule::contribute(const Cycle& cycle) {
     const bool on = config_.primary->enabled() && config_.primary->held_by() == nullptr;
     for (std::size_t k = 0; k < 3; ++k)
         set_task_active(handles_[k], on && k == static_cast<std::size_t>(preference_));
@@ -1319,7 +1367,7 @@ int CollisionModuleBase::visual_of(const CollisionPair& pair, bool second) const
 
 Status CollisionModuleBase::update_outputs(Workspace& at) {
     const CollisionConstraintOptions& o = constraint_->options();
-    const double band = o.d_min + o.activation_margin;
+    const double band = o.clearance + o.activation_margin;
     if (Status s = display_->update(at, band); !s) return s;
     const auto& pairs = display_->pairs();
     nearest_ = display_->nearest();
@@ -1484,7 +1532,7 @@ Status WorldCollisionModule::set_obstacle_pose(std::size_t obstacle, const Eigen
 }
 
 Status WorldCollisionModule::prepare(Cycle& cycle) {
-    const double timeout = config_.velocity_timeout;
+    const double timeout = config_.velocity_timeout_s;
     for (std::size_t o = 0; o < motion_.size(); ++o) {
         Motion& m = motion_[o];
         const Eigen::Isometry3d& pose = world_->pose(o);
@@ -1527,7 +1575,7 @@ Status WorldCollisionModule::read_port(std::size_t index, PortValue& out) const 
     return {};
 }
 
-Status WorldCollisionModule::write_port(std::size_t index, const PortValue& value) {
+Status WorldCollisionModule::on_write_port(std::size_t index, const PortValue& value) {
     if (index % 2 == 0) return set_obstacle_pose(index / 2, value.pose);
     return set_obstacle_enabled(index / 2, value.flag);
 }
@@ -1573,22 +1621,23 @@ Status ChassisModule::configure(ModuleSetup& setup) {
     locked.set_range(static_cast<std::size_t>(root.idx_v), static_cast<std::size_t>(root.nv));
     Result<ChassisController> ctrl = ChassisController::create(config_.chassis);
     if (!ctrl) return std::move(ctrl).error();
-    if (Status s = ctrl->set_scheduler_period(config_.period); !s) return s;
+    if (Status s = ctrl->set_scheduler_period(config_.period_s); !s) return s;
     config_.pose_limits = defaults_.pose_limits = ctrl->pose_limits();
     controller_.emplace(std::move(*ctrl));
     if (Status s = setup.lock(locked); !s) return s;
 
     const ChassisConfig& cc = controller_->config();
-    const double lateral = cc.kinematics == ChassisKinematics::omni ? cc.max_linear : 0.0;
+    const double lateral = cc.kinematics == ChassisKinematics::omni ? cc.max_linear_velocity : 0.0;
     PortInfo port;
     port.name = "velocity";
     port.type = PortType::vector;
+    port.api_priority = true;
     port.labels = {"vx", "vy", "wz"};
-    port.lower = Eigen::Vector3d(-cc.max_linear, -lateral, -cc.max_angular);
-    port.upper = Eigen::Vector3d(cc.max_linear, lateral, cc.max_angular);
+    port.lower = Eigen::Vector3d(-cc.max_linear_velocity, -lateral, -cc.max_angular_velocity);
+    port.upper = Eigen::Vector3d(cc.max_linear_velocity, lateral, cc.max_angular_velocity);
     port.timeout = cc.command_timeout_s;
     declare_port(port);
-    port.name = "pose_goal";
+    port.name = "pose_target";
     port.labels = {"x", "y", "yaw"};
     port.lower = Eigen::Vector3d::Constant(-std::numeric_limits<double>::infinity());
     port.upper = -port.lower;
@@ -1604,7 +1653,7 @@ Status ChassisModule::configure(ModuleSetup& setup) {
                                      {"nominal_wz", "rad/s"}})
         declare_output({name, OutputType::number, 0, OutputRole::value, unit});
     declare_output({"planned", OutputType::point});
-    declare_output({"goal", OutputType::point});
+    declare_output({"target", OutputType::point});
     for (const char* name : {"state", "reason", "command", "command_mode"})
         declare_output({name, OutputType::text});
     declare_output({"command_priority", OutputType::number});
@@ -1623,21 +1672,21 @@ Status ChassisModule::read_port(std::size_t index, PortValue& out) const {
         const Twist2D t = fresh ? port_command_ : Twist2D{};
         out.vector << t.vx, t.vy, t.wz;
     } else {
-        const Pose2D p = fresh ? port_goal_ : output_.pose;
+        const Pose2D p = fresh ? port_pose_target_ : output_.pose;
         out.vector << p.x, p.y, p.yaw;
     }
     return {};
 }
 
-Status ChassisModule::write_port(std::size_t index, const PortValue& value) {
-    if (index > 1) return Module::write_port(index, value);
+Status ChassisModule::on_write_port(std::size_t index, const PortValue& value) {
+    if (index > 1) return Module::on_write_port(index, value);
     if (value.vector.size() != 3 || !value.vector.allFinite())
         return make_error(ErrorCode::invalid_argument,
                           "chassis '" + id() + "': " + ports()[index].name + " needs 3 finite values");
     if (index == 0)
         port_command_ = {value.vector[0], value.vector[1], value.vector[2]};
     else
-        port_goal_ = {value.vector[0], value.vector[1], value.vector[2]};
+        port_pose_target_ = {value.vector[0], value.vector[1], value.vector[2]};
     port_mode_ = index;
     port_pending_ = true;
     return {};
@@ -1736,7 +1785,7 @@ Status ChassisModule::prepare(Cycle& cycle) {
     if (port_pending_) {
         port_pending_ = false;
         Result<bool> accepted = port_mode_ == 0 ? c.submit_velocity(port_command_, cycle.now, source_)
-                                                : c.submit_pose(port_goal_, cycle.now, source_);
+                                                : c.submit_pose(port_pose_target_, cycle.now, source_);
         if (!accepted) return std::move(accepted).error();
         if (*accepted)
             port_stamp_ = cycle.now;
@@ -1745,6 +1794,8 @@ Status ChassisModule::prepare(Cycle& cycle) {
     }
     output_ = c.step(cycle.now);
     command_ = c.command_snapshot();
+    // A fresh command submitted through controller() is application input on the matching port.
+    if (fresh() && command_.source != source_) mark_written(command_.pose_mode ? 1 : 0);
     last_index_ = cycle.index;
     stepped_ = true;
     return model_->set_root_pose(cycle.q, chassis_root_pose(c.pose(), config_.center_in_root));

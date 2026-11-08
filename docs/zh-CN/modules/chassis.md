@@ -9,7 +9,7 @@
 | 端口 | 类型 | 说明 |
 |---|---|---|
 | `velocity` | vector `[vx, vy, wz]` | 车体系速度 |
-| `pose_goal` | vector `[x, y, yaw]` | 世界系位姿目标 |
+| `pose_target` | vector `[x, y, yaw]` | 世界系位姿目标 |
 
 两个端口都在 `command_timeout_s` 后失效。最后写入的那个在下一次 step 以来源 `port` 提交。
 
@@ -19,14 +19,14 @@
 
 - `kinematics`：`omni` 或 `differential`。
 - `base_frame`：控制中心所在 frame，默认 `base_link`。
-- `max_linear`、`max_angular` 及对应的 `*_acceleration`、`*_deceleration`、`*_reversal_deceleration`、`*_jerk`：上限。速度模式直接用这些值，位姿模式的初始限制也取它们。
-- `arrival_position_tolerance`、`arrival_rotation_tolerance`：到达判定，默认 0.01 m、0.02 rad。
-- `target_translation_deadband`、`target_rotation_deadband`：差速底盘下，目标变化小于这个量时沿用当前路径。
+- `max_linear_velocity`、`max_angular_velocity` 及对应的 `*_acceleration`、`*_deceleration`、`*_reversal_deceleration`、`*_jerk`：上限。速度模式直接用这些值，位姿模式的初始限制也取它们。
+- `position_tolerance`、`orientation_tolerance`：到达判定，默认 0.01 m、0.02 rad。
+- `target_position_deadband`、`target_orientation_deadband`：差速底盘下，目标变化小于这个量时沿用当前路径。
 - `command_timeout_s`（默认 0.25）：指令超过这么久没更新就清除运动，reason 为 `command_timeout`，不算 fault。
 - `odom_timeout_s`（默认 0.25）：比这更旧的里程计被拒收；两次里程计之间用输出速度推算位姿。
 - `max_dt_s`（0.1）、`allowed_missed_cycles`（2）：两次 step 间隔超过 `max(max_dt_s, 周期 × allowed_missed_cycles)` 时进入 fault（`scheduler_discontinuity`）。模块内只有跳过一步（禁用后再启用）才会重新同步并恢复。
 
-顶层：`center_in_root`（控制中心在根节点系中的固定位姿）、`period`（初始周期，之后每周期取引擎 dt）。
+顶层：`center_in_root`（控制中心在根节点系中的固定位姿）、`period_s`（初始周期，之后每周期取引擎 dt）。
 
 ### pose_limits（只能 tune）
 
@@ -48,24 +48,24 @@ chassis:
   chassis:
     kinematics: omni
     base_frame: base_link
-    max_linear: 1.0
-    max_angular: 3.0
+    max_linear_velocity: 1.0
+    max_angular_velocity: 3.0
     max_linear_acceleration: 2.5
-    arrival_position_tolerance: 0.001
-    arrival_rotation_tolerance: 0.002
+    position_tolerance: 0.001
+    orientation_tolerance: 0.002
 ```
 
 ```python
 ch = e.module("chassis")
 ch.write_port("velocity", [0.2, 0.0, 0.0])  # 需要在 command_timeout_s 内持续写
-ch.write_port("pose_goal", [1.0, 0.0, 0.0])
-ch.tune({"pose_limits": {"linear_velocity": 0.3, "planner_mode": "axis_time"}})
+ch.write_port("pose_target", [1.0, 0.0, 0.0])
+ch.tune({"pose_limits": {"max_linear_velocity": 0.3, "planner_mode": "axis_time"}})
 ```
 
 ## 输出
 
 - `vx`、`vy`、`wz`：整形后的速度。`x`、`y`、`yaw`：位姿。`nominal_vx/vy/wz`：未整形的目标速度。
-- `planned`：轨迹当前位姿。`goal`：位姿目标，非位姿模式为 NaN。
+- `planned`：轨迹当前位姿。`target`：位姿目标，非位姿模式为 NaN。
 - `active`、`fault`、`state`、`reason`：状态及原因。
 - `command`（指令来源）、`command_mode`、`command_priority`、`command_fresh`。
 - `source`：位姿来源（内部推算或里程计）。`phase`：差速位姿模式的阶段。

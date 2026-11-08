@@ -318,7 +318,7 @@ TEST_CASE("alloc: joint trajectory step does not allocate after warm-up") {
         JointTrajectoryConfig cfg;
         cfg.trigger = JointTrigger::continuous;
         cfg.sync = sync;
-        cfg.velocity_cap = Eigen::VectorXd::Constant(6, 0.5);
+        cfg.max_velocity = Eigen::VectorXd::Constant(6, 0.5);
         auto created = JointTrajectory::create(6, cfg, {false, false, false, false, false, true});
         REQUIRE(created);
         JointTrajectory traj = std::move(*created);
@@ -353,8 +353,8 @@ TEST_CASE("alloc: pose trajectory step does not allocate after warm-up") {
         CAPTURE(std::string(to_string(sync)));
         PoseTrajectoryConfig cfg;
         cfg.sync = sync;
-        cfg.translation = {0.3, 1.0, 0.0, 0.0, 8.0};
-        cfg.rotation = {1.0, 2.0, 0.0, 0.0, 10.0};
+        cfg.position = {0.3, 1.0, 0.0, 0.0, 8.0};
+        cfg.orientation = {1.0, 2.0, 0.0, 0.0, 10.0};
         cfg.lead_speed_scale = 2.0;
         auto created = PoseTrajectory::create(cfg);
         REQUIRE(created);
@@ -390,19 +390,19 @@ TEST_CASE("alloc: module set step does not allocate after warm-up") {
     ModuleSet set = std::move(*created);
 
     ChassisModuleConfig cc;
-    cc.period = 0.01;
+    cc.period_s = 0.01;
     auto chassis = std::make_shared<ChassisModule>("chassis", cc);
     PoseTrajectoryConfig pc;
-    pc.translation = {0.3, 1.0, 0.0, 0.0, 10.0};
-    pc.rotation = {1.0, 3.0, 0.0, 0.0, 20.0};
-    FrameTaskModuleConfig lc;
+    pc.position = {0.3, 1.0, 0.0, 0.0, 10.0};
+    pc.orientation = {1.0, 3.0, 0.0, 0.0, 20.0};
+    FrameTargetModuleConfig lc;
     lc.frame = "left_tool_frame";
     lc.trajectory = pc;
-    FrameTaskModuleConfig rc = lc;
+    FrameTargetModuleConfig rc = lc;
     rc.frame = "right_tool_frame";
     lc.on_held = OnHeld::abort;  // covers on_preempted()
-    auto left = std::make_shared<FrameTaskModule>("left", lc);
-    auto right = std::make_shared<FrameTaskModule>("right", rc);
+    auto left = std::make_shared<FrameTargetModule>("left", lc);
+    auto right = std::make_shared<FrameTargetModule>("right", rc);
     JointTargetModuleConfig jc;
     for (int i = 1; i <= 7; ++i) jc.joints.push_back("left_arm_joint_" + std::to_string(i));
     auto arm = std::make_shared<JointTargetModule>("left_arm", jc);
@@ -467,20 +467,20 @@ TEST_CASE("alloc: gaze, null-space preference, centre of mass and homing do not 
     ModuleSet set = std::move(*created);
 
     PoseTrajectoryConfig pc;
-    pc.translation = {0.3, 1.0, 0.0, 0.0, 10.0};
-    pc.rotation = {1.0, 3.0, 0.0, 0.0, 20.0};
-    FrameTaskModuleConfig lc;
+    pc.position = {0.3, 1.0, 0.0, 0.0, 10.0};
+    pc.orientation = {1.0, 3.0, 0.0, 0.0, 20.0};
+    FrameTargetModuleConfig lc;
     lc.frame = "left_tool_frame";
     lc.trajectory = pc;
-    FrameTaskModuleConfig rc = lc;
+    FrameTargetModuleConfig rc = lc;
     rc.frame = "right_tool_frame";
     rc.task.level = 0;
     for (int i = 1; i <= 7; ++i) {
         lc.joints.push_back("left_arm_joint_" + std::to_string(i));
         rc.joints.push_back("right_arm_joint_" + std::to_string(i));
     }
-    auto left = std::make_shared<FrameTaskModule>("left", lc);
-    auto right = std::make_shared<FrameTaskModule>("right", rc);
+    auto left = std::make_shared<FrameTargetModule>("left", lc);
+    auto right = std::make_shared<FrameTargetModule>("right", rc);
     GazeModuleConfig gc;
     gc.frame = "head_yaw_link";
     gc.joints = {"head_pitch_joint", "head_yaw_joint"};
@@ -488,9 +488,9 @@ TEST_CASE("alloc: gaze, null-space preference, centre of mass and homing do not 
     gc.max_velocity = 1.0;
     gc.target_idle_s = 0.3;
     auto gaze = std::make_shared<GazeModule>("gaze", gc);
-    NullSpacePreferenceModuleConfig nc;
+    NullSpaceModuleConfig nc;
     nc.primary = right;
-    auto ns = std::make_shared<NullSpacePreferenceModule>("ns", nc);
+    auto ns = std::make_shared<NullSpaceModule>("ns", nc);
     CenterOfMassModuleConfig cc;
     cc.frame = "base_link";
     cc.polygon = {Eigen::Vector2d(-1, -1), Eigen::Vector2d(1, -1), Eigen::Vector2d(1, 1),
@@ -572,7 +572,6 @@ TEST_CASE("alloc: engine step with a clamping guard does not allocate after warm
     auto robot = std::make_shared<LoopbackRobot>(m->neutral(), m->nv());
     EngineOptions eo;
     eo.rate_hz = 100.0;
-    eo.realtime = false;
     eo.safety.mode = GuardMode::clamp;
     auto engine = Engine::create(std::move(*created), robot, eo);
     REQUIRE(engine);
@@ -652,7 +651,6 @@ TEST_CASE("alloc: engine step with debug server displays does not allocate after
     auto robot = std::make_shared<LoopbackRobot>(m->neutral(), m->nv());
     EngineOptions eo;
     eo.rate_hz = 100.0;
-    eo.realtime = false;
     auto engine = Engine::create(std::move(*created), robot, eo);
     REQUIRE(engine);
     DebugServerOptions dso;
@@ -716,7 +714,6 @@ TEST_CASE("alloc: telemetry snapshots do not allocate after warm-up") {
     REQUIRE(created->add(arm));
     auto robot = std::make_shared<LoopbackRobot>(m->neutral(), m->nv());
     EngineOptions eo;
-    eo.realtime = false;
     auto engine = Engine::create(std::move(*created), robot, eo);
     REQUIRE(engine);
     auto sink = std::make_shared<Sink>();

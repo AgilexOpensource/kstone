@@ -32,8 +32,8 @@ ModuleSet make_set(const ModelPtr& m) {
 
 PoseTrajectoryConfig pose_limits() {
     PoseTrajectoryConfig c;
-    c.translation = {0.3, 1.0, 0.0, 0.0, 10.0};
-    c.rotation = {1.0, 3.0, 0.0, 0.0, 20.0};
+    c.position = {0.3, 1.0, 0.0, 0.0, 10.0};
+    c.orientation = {1.0, 3.0, 0.0, 0.0, 20.0};
     return c;
 }
 
@@ -155,13 +155,13 @@ TEST_CASE("homing: state machine, timeout, preemption and skipped steps") {
     }
 }
 
-TEST_CASE("frame_task module: holds its pose, then tracks a target through the trajectory") {
+TEST_CASE("frame_target module: holds its pose, then tracks a target through the trajectory") {
     ModelPtr m = load("arm.urdf");
     ModuleSet set = make_set(m);
-    FrameTaskModuleConfig c;
+    FrameTargetModuleConfig c;
     c.frame = "tool";
     c.trajectory = pose_limits();
-    auto ft = std::make_shared<FrameTaskModule>("tool", c);
+    auto ft = std::make_shared<FrameTargetModule>("tool", c);
     REQUIRE(set.add(ft));
     REQUIRE(set.configure());
 
@@ -217,16 +217,16 @@ TEST_CASE("frame_task module: holds its pose, then tracks a target through the t
     CHECK((reached.linear() - goal.linear()).norm() < 1e-3);
 }
 
-TEST_CASE("frame_task module: per-axis weights and lm_damping reach the task and tune") {
+TEST_CASE("frame_target module: per-axis weights and lm_damping reach the task and tune") {
     ModelPtr m = load("arm.urdf");
     ModuleSet set = make_set(m);
-    FrameTaskModuleConfig c;
+    FrameTargetModuleConfig c;
     c.frame = "tool";
     c.trajectory = pose_limits();
     c.position_weight = Eigen::Vector3d(2.0, 0.0, 1.0);
     c.weight = 3.0;
     c.lm_damping = 0.5;
-    auto ft = std::make_shared<FrameTaskModule>("tool", c);
+    auto ft = std::make_shared<FrameTargetModule>("tool", c);
     REQUIRE(set.add(ft));
     REQUIRE(set.configure());
     Eigen::VectorXd expected(6);
@@ -244,37 +244,37 @@ TEST_CASE("frame_task module: per-axis weights and lm_damping reach the task and
     CHECK(ft->task()->weights().isApprox(expected));
 }
 
-TEST_CASE("frame_task module: explicit joints must move the frame relative to its reference") {
+TEST_CASE("frame_target module: explicit joints must move the frame relative to its reference") {
     ModelPtr m = load("arm.urdf");
     ModuleSet set = make_set(m);
-    FrameTaskModuleConfig c;
+    FrameTargetModuleConfig c;
     c.frame = "tool";
     c.reference = "tool";
     c.joints = {"j1", "j2"};
     c.trajectory = pose_limits();
-    REQUIRE(set.add(std::make_shared<FrameTaskModule>("tool", c)));
+    REQUIRE(set.add(std::make_shared<FrameTargetModule>("tool", c)));
     Status s = set.configure();
     REQUIRE_FALSE(s);
     CHECK(s.error().message.find("none of the joints moves") != std::string::npos);
 }
 
-TEST_CASE("frame_task module: locked freezes the chain, unlocking holds the current pose") {
+TEST_CASE("frame_target module: locked freezes the chain, unlocking holds the current pose") {
     ModelPtr m = load("arm.urdf");
     {
         ModuleSet set = make_set(m);
-        FrameTaskModuleConfig c;
+        FrameTargetModuleConfig c;
         c.frame = "tool";
         c.trajectory = pose_limits();
         c.locked = true;
-        REQUIRE(set.add(std::make_shared<FrameTaskModule>("tool", c)));
+        REQUIRE(set.add(std::make_shared<FrameTargetModule>("tool", c)));
         CHECK_FALSE(set.configure());  // locking needs explicit joints
     }
     ModuleSet set = make_set(m);
-    FrameTaskModuleConfig c;
+    FrameTargetModuleConfig c;
     c.frame = "tool";
     c.joints = {"j1", "j2", "j3", "j4"};
     c.trajectory = pose_limits();
-    auto ft = std::make_shared<FrameTaskModule>("tool", c);
+    auto ft = std::make_shared<FrameTargetModule>("tool", c);
     REQUIRE(set.add(ft));
     REQUIRE(set.configure());
     CHECK(ft->tunables().find("locked")->as_bool() == false);
@@ -309,10 +309,10 @@ TEST_CASE("frame_task module: locked freezes the chain, unlocking holds the curr
 TEST_CASE("joint_target module: claims past arrival until a pose target takes over") {
     ModelPtr m = load("arm.urdf");
     ModuleSet set = make_set(m);
-    FrameTaskModuleConfig fc;
+    FrameTargetModuleConfig fc;
     fc.frame = "tool";
     fc.trajectory = pose_limits();
-    auto ft = std::make_shared<FrameTaskModule>("tool", fc);
+    auto ft = std::make_shared<FrameTargetModule>("tool", fc);
     JointTargetModuleConfig jc;
     jc.joints = {"j1", "j2", "j3"};
     jc.priority = 1;
@@ -383,10 +383,10 @@ TEST_CASE("joint_target module: claims past arrival until a pose target takes ov
 TEST_CASE("joint_target module: release_after_s defers a request until joint input stops") {
     ModelPtr m = load("arm.urdf");
     ModuleSet set = make_set(m);
-    FrameTaskModuleConfig fc;
+    FrameTargetModuleConfig fc;
     fc.frame = "tool";
     fc.trajectory = pose_limits();
-    auto ft = std::make_shared<FrameTaskModule>("tool", fc);
+    auto ft = std::make_shared<FrameTargetModule>("tool", fc);
     JointTargetModuleConfig jc;
     jc.joints = {"j1", "j2", "j3"};
     jc.priority = 1;
@@ -436,7 +436,7 @@ TEST_CASE("joint_target module: release_after_s defers a request until joint inp
     CHECK(ft->running());
 }
 
-TEST_CASE("joint_target module: hold_idle false leaves idle joints to other tasks") {
+TEST_CASE("joint_target module: on_idle release leaves idle joints to other tasks") {
     ModelPtr m = load("arm.urdf");
     Eigen::VectorXd q0 = m->neutral();
     q0[m->joints()[m->joint_id("j2").value()].idx_q] = 0.3;
@@ -447,15 +447,15 @@ TEST_CASE("joint_target module: hold_idle false leaves idle joints to other task
     }
     const Eigen::Isometry3d goal = pose_at(m, q_goal, "tool");
 
-    auto run = [&](bool hold_idle) {
+    auto run = [&](OnIdle on_idle) {
         ModuleSet set = make_set(m);
-        FrameTaskModuleConfig fc;
+        FrameTargetModuleConfig fc;
         fc.frame = "tool";
         fc.trajectory = pose_limits();
-        auto ft = std::make_shared<FrameTaskModule>("tool", fc);
+        auto ft = std::make_shared<FrameTargetModule>("tool", fc);
         JointTargetModuleConfig jc;
         jc.joints = {"j1", "j2", "j3"};
-        jc.hold_idle = hold_idle;
+        jc.on_idle = on_idle;
         auto jt = std::make_shared<JointTargetModule>("joints", jc);
         REQUIRE(set.add(ft));
         REQUIRE(set.add(jt));
@@ -479,23 +479,22 @@ TEST_CASE("joint_target module: hold_idle false leaves idle joints to other task
         return error;
     };
     // Holding fights the frame task; released, the frame task reaches its goal.
-    CHECK(run(true) > 1e-3);
-    CHECK(run(false) < 1e-4);
+    CHECK(run(OnIdle::hold) > 1e-3);
+    CHECK(run(OnIdle::release) < 1e-4);
 }
 
-TEST_CASE("joint_target module: claim_idle holds the joints, tunes off and on, and syncs on enable") {
+TEST_CASE("joint_target module: on_idle claim holds the joints, tunes off and on, and syncs on enable") {
     ModelPtr m = load("arm.urdf");
     Eigen::VectorXd q0 = m->neutral();
     q0[m->joints()[m->joint_id("j2").value()].idx_q] = 0.3;
     ModuleSet set = make_set(m);
-    FrameTaskModuleConfig fc;
+    FrameTargetModuleConfig fc;
     fc.frame = "tool";
     fc.trajectory = pose_limits();
-    auto ft = std::make_shared<FrameTaskModule>("tool", fc);
+    auto ft = std::make_shared<FrameTargetModule>("tool", fc);
     JointTargetModuleConfig jc;
     jc.joints = {"j1", "j2", "j3"};
-    jc.hold_idle = false;
-    jc.claim_idle = true;
+    jc.on_idle = OnIdle::claim;
     auto jt = std::make_shared<JointTargetModule>("joints", jc);
     REQUIRE(set.add(ft));
     REQUIRE(set.add(jt));
@@ -527,12 +526,12 @@ TEST_CASE("joint_target module: claim_idle holds the joints, tunes off and on, a
 
     // Tuned off: released at once; tuned on: holds where the joints are.
     ConfigNode off = ConfigNode::map();
-    off.set("claim_idle", false);
+    off.set("on_idle", "release");
     REQUIRE(jt->tune(off));
     loop.step(2);
     CHECK(ft->held_by() == nullptr);
     ConfigNode on = ConfigNode::map();
-    on.set("claim_idle", true);
+    on.set("on_idle", "claim");
     REQUIRE(jt->tune(on));
     loop.step(2);
     CHECK(ft->held_by() != nullptr);
@@ -561,16 +560,16 @@ namespace {
 Eigen::VectorXd arm_pose(const ModelPtr& m, double d);
 }  // namespace
 
-TEST_CASE("on_held: frame_task and joint_target resume the target with wait and drop it with abort") {
+TEST_CASE("on_held: frame_target and joint_target resume the target with wait and drop it with abort") {
     for (const OnHeld policy : {OnHeld::wait, OnHeld::abort}) {
         CAPTURE(to_string(policy));
         ModelPtr m = load("arm.urdf");
         ModuleSet set = make_set(m);
-        FrameTaskModuleConfig fc;
+        FrameTargetModuleConfig fc;
         fc.frame = "tool";
         fc.trajectory = pose_limits();
         fc.on_held = policy;
-        auto ft = std::make_shared<FrameTaskModule>("tool", fc);
+        auto ft = std::make_shared<FrameTargetModule>("tool", fc);
         JointTargetModuleConfig lc;
         lc.joints = {"j2", "j3"};
         lc.on_held = policy;
@@ -584,7 +583,7 @@ TEST_CASE("on_held: frame_task and joint_target resume the target with wait and 
         REQUIRE(set.add(high));
         REQUIRE(set.configure());
 
-        // frame_task: preempted half-way to a target by a joint claim. Idle joint modules would hold
+        // frame_target: preempted half-way to a target by a joint claim. Idle joint modules would hold
         // their joints against it, so only the active ones stay enabled.
         low->set_enabled(false);
         high->set_enabled(false);
@@ -651,13 +650,13 @@ TEST_CASE("on_held: frame_task and joint_target resume the target with wait and 
     }
 }
 
-TEST_CASE("module ports: frame_task pose and joint_target vector round-trip through set_target") {
+TEST_CASE("module ports: frame_target pose and joint_target vector round-trip through set_target") {
     ModelPtr m = load("arm.urdf");
     ModuleSet set = make_set(m);
-    FrameTaskModuleConfig fc;
+    FrameTargetModuleConfig fc;
     fc.frame = "tool";
     fc.trajectory = pose_limits();
-    auto ft = std::make_shared<FrameTaskModule>("tool", fc);
+    auto ft = std::make_shared<FrameTargetModule>("tool", fc);
     JointTargetModuleConfig jc;
     jc.joints = {"j1", "j3"};
     auto jt = std::make_shared<JointTargetModule>("joints", jc);
@@ -701,10 +700,17 @@ TEST_CASE("module ports: frame_task pose and joint_target vector round-trip thro
     v.pose.linear() *= 2.0;
     CHECK_FALSE(ft->write_port(0, v));
     CHECK(ft->read_port(1, v).error().code == ErrorCode::out_of_range);
+    CHECK(ft->write_count(0) == 1);  // Rejected writes are not counted.
+    CHECK(ft->write_port(1, v).error().code == ErrorCode::out_of_range);
+    CHECK(ft->write_count(1) == 0);
+    REQUIRE(ft->set_target(ft->target()));
+    CHECK(ft->write_count(0) == 2);  // Typed setters count as port writes.
 
     v.vector = Eigen::Vector2d(0.2, 0.1);
     REQUIRE(jt->write_port(0, v));
     CHECK(jt->claiming());
+    REQUIRE(jt->set_target(v.vector));
+    CHECK(jt->write_count(0) == 2);
     PortValue r;
     REQUIRE(jt->read_port(0, r));
     CHECK(r.vector.isApprox(v.vector));
@@ -716,6 +722,20 @@ TEST_CASE("module ports: frame_task pose and joint_target vector round-trip thro
     v.vector = Eigen::VectorXd::Zero(3);
     CHECK_FALSE(jt->write_port(0, v));
     CHECK(std::string(to_string(PortType::vector)) == "vector");
+
+    REQUIRE(jt->set_target(Eigen::Vector2d(0.2, 0.1)));
+    REQUIRE(jt->set_target({"j3"}, Eigen::VectorXd::Constant(1, -0.4)));
+    CHECK(jt->target().isApprox(Eigen::Vector2d(0.2, -0.4)));
+    REQUIRE(jt->set_target({"j3", "j1"}, Eigen::Vector2d(0.3, 1e308)));
+    CHECK(jt->target().isApprox(Eigen::Vector2d(jp.upper[0], 0.3)));
+    CHECK(jt->write_count(0) == 6);
+    CHECK_FALSE(jt->set_target({"j2"}, Eigen::VectorXd::Constant(1, 0.0)));
+    CHECK_FALSE(jt->set_target({"j1", "j1"}, Eigen::Vector2d(0.0, 0.0)));
+    CHECK_FALSE(jt->set_target({"j1"}, Eigen::Vector2d(0.0, 0.0)));
+    CHECK_FALSE(jt->set_target({"j1"}, Eigen::VectorXd::Constant(1, NAN)));
+    CHECK_FALSE(jt->set_target(std::vector<std::string>{}, Eigen::VectorXd()));
+    CHECK(jt->target().isApprox(Eigen::Vector2d(jp.upper[0], 0.3)));
+    CHECK(jt->write_count(0) == 6);
 }
 
 TEST_CASE("joint_target module: rejects non-scalar joints and missing limits") {
@@ -749,7 +769,7 @@ WorldObstacle ball_at(double x) {
     return o;
 }
 
-TEST_CASE("world_collision module: stops a joint target at d_min until disabled") {
+TEST_CASE("world_collision module: stops a joint target at clearance until disabled") {
     ModelPtr m = load("slider_collision.urdf");
     CollisionModelOptions co;
     co.self_collision = false;
@@ -774,7 +794,7 @@ TEST_CASE("world_collision module: stops a joint target at d_min until disabled"
     Loop loop{m, set, m->neutral()};
     REQUIRE(jt->set_target(Eigen::VectorXd::Constant(1, 0.55)));
     loop.step(500);
-    // Gap = 0.5 - x - 0.2 >= d_min (0.03).
+    // Gap = 0.5 - x - 0.2 >= clearance (0.03).
     const double x = loop.q[0];
     CHECK(x <= 0.27 + 1e-4);
     CHECK(x > 0.25);
@@ -887,7 +907,7 @@ TEST_CASE("world_collision module: visuals and display outputs") {
     REQUIRE(col->read_output(3, v));
     CHECK(v.visuals.empty());
 
-    // Gap 0.035 is inside d_min + activation_margin = 0.04.
+    // Gap 0.035 is inside clearance + activation_margin = 0.04.
     Eigen::VectorXd q = m->neutral();
     q[0] = 0.265;
     REQUIRE(ws.update(q));
@@ -1003,13 +1023,13 @@ TEST_CASE("world_collision module: estimates obstacle velocity from pose writes"
         pv.pose.translation().x() = x;
         REQUIRE(col->write_port(0, pv));
         loop.step();
-        min_margin = std::min(min_margin, x - loop.q[0] - 0.2 - sc.constraint.d_min);
+        min_margin = std::min(min_margin, x - loop.q[0] - 0.2 - sc.constraint.clearance);
     }
     CHECK(col->world()->linear_velocity(0).isApprox(Eigen::Vector3d(-1.0, 0, 0), 1e-9));
     CHECK(loop.q[0] < -0.03);  // pushed back past 0
     CHECK(min_margin > -1e-3);
 
-    // No writes for longer than velocity_timeout: static again.
+    // No writes for longer than velocity_timeout_s: static again.
     loop.step(19);
     CHECK_FALSE(col->world()->linear_velocity(0).isZero());
     loop.step(2);
@@ -1020,12 +1040,12 @@ TEST_CASE("world_collision module: estimates obstacle velocity from pose writes"
     REQUIRE(col->write_port(0, pv));
     loop.step();
     CHECK(col->world()->linear_velocity(0).isZero());
-    REQUIRE(col->tune(ConfigNode::map({{"velocity_timeout", 0.0}})));
+    REQUIRE(col->tune(ConfigNode::map({{"velocity_timeout_s", 0.0}})));
     pv.pose.translation().x() = 0.45;
     REQUIRE(col->write_port(0, pv));
     loop.step();
     CHECK(col->world()->linear_velocity(0).isZero());
-    CHECK_FALSE(col->tune(ConfigNode::map({{"velocity_timeout", -1.0}})));
+    CHECK_FALSE(col->tune(ConfigNode::map({{"velocity_timeout_s", -1.0}})));
 }
 
 TEST_CASE("world_collision module: rejects empty, duplicate and slashed obstacles") {
@@ -1055,14 +1075,14 @@ TEST_CASE("chassis module: locks the root and writes the controller pose") {
     ModuleSet set = make_set(m);
     ChassisModuleConfig cc;
     cc.chassis.kinematics = ChassisKinematics::differential;
-    cc.period = 0.02;
+    cc.period_s = 0.02;
     auto ch = std::make_shared<ChassisModule>("chassis", cc);
     CHECK(ch->controller() == nullptr);
-    FrameTaskModuleConfig fc;
+    FrameTargetModuleConfig fc;
     fc.frame = "tool";
     fc.joints = {"lift_joint", "shoulder_yaw_joint", "shoulder_pitch_joint", "elbow_joint"};
     fc.trajectory = pose_limits();
-    auto ft = std::make_shared<FrameTaskModule>("tool", fc);
+    auto ft = std::make_shared<FrameTargetModule>("tool", fc);
     REQUIRE(set.add(ch));
     REQUIRE(set.add(ft));
     REQUIRE(set.configure());
@@ -1078,11 +1098,14 @@ TEST_CASE("chassis module: locks the root and writes the controller pose") {
         REQUIRE(loop.out.v.head<6>().norm() < 1e-9);
         if (i == 0) CHECK(ch->controller()->state() == ChassisState::active);
     }
+    // Direct controller() commands count as application writes to the pose port.
+    CHECK(ch->write_count(0) == 0);
+    CHECK(ch->write_count(1) > 0);
     const Pose2D p = ch->controller()->pose();
     auto root = m->root_pose(loop.q);
     REQUIRE(root);
     CHECK(root->isApprox(chassis_root_pose(p), 1e-9));
-    CHECK(std::hypot(p.x - goal.x, p.y - goal.y) < 1.5 * ChassisConfig{}.arrival_position_tolerance);
+    CHECK(std::hypot(p.x - goal.x, p.y - goal.y) < 1.5 * ChassisConfig{}.position_tolerance);
     CHECK(ch->output().state == ChassisState::active);
 
     // Skipped cycles pause and resynchronise instead of integrating the gap.
@@ -1106,7 +1129,7 @@ TEST_CASE("chassis module: follows the engine dt and recovers a fault on resynch
     ModuleSet set = make_set(m);
     ChassisModuleConfig cc;
     cc.chassis.kinematics = ChassisKinematics::differential;
-    cc.period = 0.02;
+    cc.period_s = 0.02;
     auto ch = std::make_shared<ChassisModule>("chassis", cc);
     REQUIRE(set.add(ch));
     REQUIRE(set.configure());
@@ -1138,20 +1161,20 @@ TEST_CASE("chassis module: velocity port lapses and outputs follow the controlle
     ModuleSet set = make_set(m);
     ChassisModuleConfig cc;
     cc.chassis.kinematics = ChassisKinematics::differential;
-    cc.period = 0.02;
+    cc.period_s = 0.02;
     auto ch = std::make_shared<ChassisModule>("chassis", cc);
     REQUIRE(set.add(ch));
     REQUIRE(set.configure());
 
     REQUIRE(ch->ports().size() == 2);
-    CHECK(ch->ports()[1].name == "pose_goal");
+    CHECK(ch->ports()[1].name == "pose_target");
     const PortInfo& port = ch->ports()[0];
     CHECK(port.name == "velocity");
     CHECK(port.size() == 3);
     CHECK(port.timeout == ChassisConfig{}.command_timeout_s);
     CHECK(port.lower[1] == 0.0);
     CHECK(port.upper[1] == 0.0);
-    CHECK(port.upper[0] == ChassisConfig{}.max_linear);
+    CHECK(port.upper[0] == ChassisConfig{}.max_linear_velocity);
     REQUIRE(ch->outputs().size() == 21);
     CHECK(ch->outputs()[6].name == "active");
     CHECK(ch->outputs()[13].name == "state");
@@ -1169,6 +1192,7 @@ TEST_CASE("chassis module: velocity port lapses and outputs follow the controlle
         REQUIRE(ch->write_port(0, cmd));
         loop.step();
     }
+    CHECK(ch->write_count(0) == 100);  // Port commands are not counted again as controller() input.
     PortValue read;
     REQUIRE(ch->read_port(0, read));
     CHECK(read.vector.isApprox(cmd.vector));
@@ -1197,10 +1221,11 @@ TEST_CASE("chassis module: velocity port lapses and outputs follow the controlle
 
     // pose_limits starts from the chassis max_* fields and tunes at runtime.
     ConfigNode t = ch->tunables();
-    CHECK(t.find("pose_limits")->find("linear_velocity")->as_number() == ChassisConfig{}.max_linear);
+    CHECK(t.find("pose_limits")->find("max_linear_velocity")->as_number() ==
+          ChassisConfig{}.max_linear_velocity);
     CHECK(t.find("pose_limits")->find("planner_mode")->as_string() == "straight");
     ConfigNode lim = ConfigNode::map();
-    lim.set("linear_velocity", 0.3);
+    lim.set("max_linear_velocity", 0.3);
     lim.set("planner_mode", std::string("axis_time"));
     ConfigNode patch = ConfigNode::map();
     patch.set("pose_limits", lim);
@@ -1208,12 +1233,12 @@ TEST_CASE("chassis module: velocity port lapses and outputs follow the controlle
     lim.set("planner_mode", std::string("straight"));
     patch.set("pose_limits", lim);
     REQUIRE(ch->tune(patch));
-    CHECK(ch->controller()->pose_limits().linear_velocity == 0.3);
+    CHECK(ch->controller()->pose_limits().max_linear_velocity == 0.3);
     CHECK(ch->controller()->pose_limits().planner_mode == ChassisPlannerMode::straight);
-    lim.set("linear_velocity", -1.0);
+    lim.set("max_linear_velocity", -1.0);
     patch.set("pose_limits", lim);
     CHECK_FALSE(ch->tune(patch));
-    CHECK(ch->controller()->pose_limits().linear_velocity == 0.3);
+    CHECK(ch->controller()->pose_limits().max_linear_velocity == 0.3);
     CHECK(ch->tune_schema().find("properties")->find("pose_limits") != nullptr);
 
     // Without rewrites the command lapses and the base ramps to rest.
@@ -1226,13 +1251,13 @@ TEST_CASE("chassis module: velocity port lapses and outputs follow the controlle
     CHECK_FALSE(v.flag);
 }
 
-TEST_CASE("chassis module: pose_goal port drives the base to the goal and lapses") {
+TEST_CASE("chassis module: pose_target port drives the base to the goal and lapses") {
     ModelOptions o;
     o.root = RootJoint::free_flyer;
     ModelPtr m = load("diff_chassis.urdf", o);
     ModuleSet set = make_set(m);
     ChassisModuleConfig cc;
-    cc.period = 0.02;
+    cc.period_s = 0.02;
     auto ch = std::make_shared<ChassisModule>("chassis", cc);
     REQUIRE(set.add(ch));
     REQUIRE(set.configure());
@@ -1261,7 +1286,7 @@ TEST_CASE("chassis module: pose_goal port drives the base to the goal and lapses
     CHECK(p.y == doctest::Approx(-0.2).epsilon(1e-3));
     CHECK(p.yaw == doctest::Approx(0.5).epsilon(1e-3));
 
-    // A velocity write replaces the goal; once it lapses pose_goal reads back the current pose.
+    // A velocity write replaces the goal; once it lapses pose_target reads back the current pose.
     PortValue cmd;
     cmd.vector = Eigen::Vector3d(0.1, 0.0, 0.0);
     REQUIRE(ch->write_port(0, cmd));
@@ -1298,14 +1323,14 @@ int run_until(Loop& loop, const M& module, HomeStatus status, int limit = 3000) 
 }
 }  // namespace
 
-TEST_CASE("frame_task module: home preempts a plain claim, succeeds and rejects new targets meanwhile") {
+TEST_CASE("frame_target module: home preempts a plain claim, succeeds and rejects new targets meanwhile") {
     ModelPtr m = load("arm.urdf");
     ModuleSet set = make_set(m);
-    FrameTaskModuleConfig fc;
+    FrameTargetModuleConfig fc;
     fc.frame = "tool";
     fc.trajectory = pose_limits();
     fc.home_motion.velocity_scale = 0.5;
-    auto ft = std::make_shared<FrameTaskModule>("tool", fc);
+    auto ft = std::make_shared<FrameTargetModule>("tool", fc);
     JointTargetModuleConfig jc;
     jc.joints = {"j1"};
     auto jt = std::make_shared<JointTargetModule>("j1", jc);
@@ -1354,16 +1379,16 @@ TEST_CASE("frame_task module: home preempts a plain claim, succeeds and rejects 
     CHECK((pose_at(m, loop.q, "tool").translation() - goal.translation()).norm() < 1e-4);
 }
 
-TEST_CASE("frame_task module: default home without a reference follows a moved root") {
+TEST_CASE("frame_target module: default home without a reference follows a moved root") {
     ModelOptions o;
     o.root = RootJoint::free_flyer;
     ModelPtr m = load("floating_base.urdf", o);
     ModuleSet set = make_set(m);
-    FrameTaskModuleConfig fc;
+    FrameTargetModuleConfig fc;
     fc.frame = "tool";
     fc.joints = {"joint1", "joint2", "joint3", "joint4"};
     fc.trajectory = pose_limits();
-    auto ft = std::make_shared<FrameTaskModule>("tool", fc);
+    auto ft = std::make_shared<FrameTargetModule>("tool", fc);
     REQUIRE(set.add(ft));
     REQUIRE(set.configure());
     const Eigen::Isometry3d in_root = pose_at(m, m->neutral(), "tool");
@@ -1388,19 +1413,20 @@ TEST_CASE("frame_task module: default home without a reference follows a moved r
 }
 
 TEST_CASE(
-    "frame_task module: held since start, the target follows the observed pose, not the configure-time one") {
+    "frame_target module: held since start, the target follows the observed pose, not the configure-time "
+    "one") {
     ModelOptions o;
     o.root = RootJoint::free_flyer;
     ModelPtr m = load("floating_base.urdf", o);
     ModuleSet set = make_set(m);
-    FrameTaskModuleConfig fc;
+    FrameTargetModuleConfig fc;
     fc.frame = "tool";
     fc.joints = {"joint1", "joint2", "joint3", "joint4"};
     fc.trajectory = pose_limits();
-    auto ft = std::make_shared<FrameTaskModule>("tool", fc);
+    auto ft = std::make_shared<FrameTargetModule>("tool", fc);
     JointTargetModuleConfig jc;
     jc.joints = fc.joints;
-    jc.claim_idle = true;
+    jc.on_idle = OnIdle::claim;
     auto jt = std::make_shared<JointTargetModule>("joints", jc);
     REQUIRE(set.add(ft));
     REQUIRE(set.add(jt));
@@ -1417,16 +1443,16 @@ TEST_CASE(
     CHECK(ft->target().isApprox(pose_at(m, loop.q, "tool"), 1e-9));
 }
 
-TEST_CASE("frame_task module: running idle, the target holds where it was while the root moves") {
+TEST_CASE("frame_target module: running idle, the target holds where it was while the root moves") {
     ModelOptions o;
     o.root = RootJoint::free_flyer;
     ModelPtr m = load("floating_base.urdf", o);
     ModuleSet set = make_set(m);
-    FrameTaskModuleConfig fc;
+    FrameTargetModuleConfig fc;
     fc.frame = "tool";
     fc.joints = {"joint1", "joint2", "joint3", "joint4"};
     fc.trajectory = pose_limits();
-    auto ft = std::make_shared<FrameTaskModule>("tool", fc);
+    auto ft = std::make_shared<FrameTargetModule>("tool", fc);
     REQUIRE(set.add(ft));
     REQUIRE(set.configure());
 
@@ -1441,17 +1467,17 @@ TEST_CASE("frame_task module: running idle, the target holds where it was while 
     CHECK(ft->target().isApprox(held, 1e-12));
 }
 
-TEST_CASE("frame_task / joint_target: held, outputs and ports follow the robot, not a frozen ramp") {
+TEST_CASE("frame_target / joint_target: held, outputs and ports follow the robot, not a frozen ramp") {
     ModelPtr m = load("arm.urdf");
     ModuleSet set = make_set(m);
-    FrameTaskModuleConfig fc;
+    FrameTargetModuleConfig fc;
     fc.frame = "tool";
     fc.joints = {"j1", "j2", "j3", "j4"};
     fc.trajectory = pose_limits();
-    auto ft = std::make_shared<FrameTaskModule>("tool", fc);
+    auto ft = std::make_shared<FrameTargetModule>("tool", fc);
     JointTargetModuleConfig idle;
     idle.joints = {"j2"};
-    idle.claim_idle = true;
+    idle.on_idle = OnIdle::claim;
     auto low = std::make_shared<JointTargetModule>("low", idle);
     JointTargetModuleConfig jc;
     jc.joints = {"j2"};
@@ -1488,13 +1514,13 @@ TEST_CASE("frame_task / joint_target: held, outputs and ports follow the robot, 
     CHECK(std::abs(joint_q(m, loop.q, "j2") - joint_q(m, measured, "j2")) > 1e-4);  // still moving
 }
 
-TEST_CASE("frame_task module: home starts its ramp from the observed pose, not a stale one") {
+TEST_CASE("frame_target module: home starts its ramp from the observed pose, not a stale one") {
     ModelPtr m = load("arm.urdf");
     ModuleSet set = make_set(m);
-    FrameTaskModuleConfig fc;
+    FrameTargetModuleConfig fc;
     fc.frame = "tool";
     fc.trajectory = pose_limits();
-    auto ft = std::make_shared<FrameTaskModule>("tool", fc);
+    auto ft = std::make_shared<FrameTargetModule>("tool", fc);
     REQUIRE(set.add(ft));
     REQUIRE(set.configure());
 
@@ -1516,14 +1542,14 @@ TEST_CASE("frame_task module: home starts its ramp from the observed pose, not a
     CHECK((ft->task()->target().translation() - observed).norm() < 0.005);
 }
 
-TEST_CASE("frame_task module: preemptive home holds others, rejects targets and times out") {
+TEST_CASE("frame_target module: preemptive home holds others, rejects targets and times out") {
     ModelPtr m = load("arm.urdf");
     ModuleSet set = make_set(m);
-    FrameTaskModuleConfig fc;
+    FrameTargetModuleConfig fc;
     fc.frame = "tool";
     fc.trajectory = pose_limits();
     fc.home_motion.timeout_s = 5.0;
-    auto ft = std::make_shared<FrameTaskModule>("tool", fc);
+    auto ft = std::make_shared<FrameTargetModule>("tool", fc);
     JointTargetModuleConfig jc;
     jc.joints = {"j1"};
     jc.priority = 10;
@@ -1533,7 +1559,7 @@ TEST_CASE("frame_task module: preemptive home holds others, rejects targets and 
     REQUIRE(set.set_initial(arm_pose(m, 0.2)));
     REQUIRE(set.configure());
     CHECK_FALSE(set.set_initial(arm_pose(m, 0.2)));
-    CHECK_FALSE(FrameTaskModule("x", fc).request_home());
+    CHECK_FALSE(FrameTargetModule("x", fc).request_home());
 
     Loop loop{m, set, arm_pose(m, 0.3)};
     loop.step();
@@ -1575,7 +1601,7 @@ TEST_CASE("frame_task module: preemptive home holds others, rejects targets and 
     REQUIRE(ft->home_status() == HomeStatus::succeeded);
     fc.home_motion.timeout_s = 0.1;
     ModuleSet slow_set = make_set(m);
-    auto slow = std::make_shared<FrameTaskModule>("tool", fc);
+    auto slow = std::make_shared<FrameTargetModule>("tool", fc);
     REQUIRE(slow_set.add(slow));
     REQUIRE(slow_set.configure());
     Loop slow_loop{m, slow_set, m->neutral()};
@@ -1615,10 +1641,10 @@ TEST_CASE("frame_task module: preemptive home holds others, rejects targets and 
 TEST_CASE("joint_target module: home returns to the initial posture") {
     ModelPtr m = load("arm.urdf");
     ModuleSet set = make_set(m);
-    FrameTaskModuleConfig fc;
+    FrameTargetModuleConfig fc;
     fc.frame = "tool";
     fc.trajectory = pose_limits();
-    auto ft = std::make_shared<FrameTaskModule>("tool", fc);
+    auto ft = std::make_shared<FrameTargetModule>("tool", fc);
     JointTargetModuleConfig jc;
     jc.joints = {"j1", "j2", "j3"};
     jc.home_motion.velocity_scale = 0.5;
@@ -1660,7 +1686,7 @@ TEST_CASE("joint_target module: home returns to the initial posture") {
     INFO("steps " << steps);
     CHECK(jt->home_status() == HomeStatus::succeeded);
     for (const char* j : {"j1", "j2", "j3"})
-        CHECK(std::abs(std::remainder(joint_q(m, loop.q, j) - 0.1, 2 * M_PI)) < jc.tolerance);
+        CHECK(std::abs(std::remainder(joint_q(m, loop.q, j) - 0.1, 2 * M_PI)) < jc.position_tolerance);
     // The finished home keeps joint control; a pose target takes it over.
     CHECK(jt->claiming());
     loop.step(2);
@@ -1704,7 +1730,7 @@ TEST_CASE("joint_target module: home returns to the initial posture") {
     CHECK(neutral_jt->home_status() == HomeStatus::succeeded);
     for (const char* j : {"j1", "j2", "j3"})
         CHECK(std::abs(std::remainder(joint_q(m, plain_loop.q, j) - joint_q(m, m->neutral(), j), 2 * M_PI)) <
-              jc.tolerance);
+              jc.position_tolerance);
 
     // Explicit home, bad size rejected.
     jc.home = Eigen::VectorXd::Zero(2);
@@ -1771,11 +1797,11 @@ TEST_CASE("gaze module: preempted while tracking, the focus is cleared rather th
     o.root = RootJoint::free_flyer;
     ModelPtr m = load("omni_dual_arm_gripper.urdf", o);
     ModuleSet set = make_set(m);
-    FrameTaskModuleConfig fc;
+    FrameTargetModuleConfig fc;
     fc.frame = "left_tool_frame";
     for (int i = 1; i <= 7; ++i) fc.joints.push_back("left_arm_joint_" + std::to_string(i));
     fc.trajectory = pose_limits();
-    auto arm = std::make_shared<FrameTaskModule>("left", fc);
+    auto arm = std::make_shared<FrameTargetModule>("left", fc);
     GazeModuleConfig gc;
     gc.frame = "head_yaw_link";
     gc.joints = {"head_pitch_joint", "head_yaw_joint"};
@@ -1815,14 +1841,14 @@ TEST_CASE("gaze module: aims at the mean of active frames and returns home when 
     o.root = RootJoint::free_flyer;
     ModelPtr m = load("omni_dual_arm_gripper.urdf", o);
     ModuleSet set = make_set(m);
-    std::vector<std::shared_ptr<FrameTaskModule>> arms;
+    std::vector<std::shared_ptr<FrameTargetModule>> arms;
     for (const char* side : {"left", "right"}) {
-        FrameTaskModuleConfig fc;
+        FrameTargetModuleConfig fc;
         fc.frame = std::string(side) + "_tool_frame";
         for (int i = 1; i <= 7; ++i)
             fc.joints.push_back(std::string(side) + "_arm_joint_" + std::to_string(i));
         fc.trajectory = pose_limits();
-        arms.push_back(std::make_shared<FrameTaskModule>(side, fc));
+        arms.push_back(std::make_shared<FrameTargetModule>(side, fc));
     }
     GazeModuleConfig gc;
     gc.frame = "head_yaw_link";
@@ -2016,11 +2042,11 @@ TEST_CASE("gaze module: follows frames moved by joint control, ignores base moti
 TEST_CASE("center_of_mass module: only the recovery tasks' joints may pull the CoM back") {
     ModelPtr m = load("arm.urdf");
     ModuleSet set = make_set(m);
-    FrameTaskModuleConfig fc;
+    FrameTargetModuleConfig fc;
     fc.frame = "tool";
     fc.joints = {"j1", "j2"};
     fc.trajectory = pose_limits();
-    auto ft = std::make_shared<FrameTaskModule>("tool", fc);
+    auto ft = std::make_shared<FrameTargetModule>("tool", fc);
     CenterOfMassModuleConfig cc;
     cc.frame = "base_link";
     cc.polygon = {Eigen::Vector2d(-1, -1), Eigen::Vector2d(1, -1), Eigen::Vector2d(1, 1),
@@ -2107,17 +2133,17 @@ TEST_CASE("center_of_mass module: display outputs") {
     CHECK(inside.flag == (slack.number >= 0.1));
 }
 
-TEST_CASE("null_space_preference module: one preference task active, switchable at runtime") {
+TEST_CASE("null_space module: one preference task active, switchable at runtime") {
     ModelPtr m = load("arm.urdf");
     ModuleSet set = make_set(m);
-    FrameTaskModuleConfig fc;
+    FrameTargetModuleConfig fc;
     fc.frame = "tool";
     fc.trajectory = pose_limits();
     fc.task.level = 0;
-    auto ft = std::make_shared<FrameTaskModule>("tool", fc);
-    NullSpacePreferenceModuleConfig nc;
+    auto ft = std::make_shared<FrameTargetModule>("tool", fc);
+    NullSpaceModuleConfig nc;
     nc.primary = ft;
-    auto ns = std::make_shared<NullSpacePreferenceModule>("ns", nc);
+    auto ns = std::make_shared<NullSpaceModule>("ns", nc);
     REQUIRE(set.add(ns));
     REQUIRE(set.add(ft));
     const Status configured = set.configure();
@@ -2149,24 +2175,24 @@ TEST_CASE("null_space_preference module: one preference task active, switchable 
     nc.reference = PostureReference::custom;
     nc.posture = Eigen::VectorXd::Zero(2);
     ModuleSet bad = make_set(m);
-    auto ft2 = std::make_shared<FrameTaskModule>("tool", fc);
+    auto ft2 = std::make_shared<FrameTargetModule>("tool", fc);
     REQUIRE(bad.add(ft2));
     nc.primary = ft2;
-    REQUIRE(bad.add(std::make_shared<NullSpacePreferenceModule>("ns", nc)));
+    REQUIRE(bad.add(std::make_shared<NullSpaceModule>("ns", nc)));
     CHECK_FALSE(bad.configure());
 }
 
-TEST_CASE("null_space_preference module: held with its primary, off while the primary is disabled") {
+TEST_CASE("null_space module: held with its primary, off while the primary is disabled") {
     ModelPtr m = load("arm.urdf");
     ModuleSet set = make_set(m);
-    FrameTaskModuleConfig fc;
+    FrameTargetModuleConfig fc;
     fc.frame = "tool";
     fc.trajectory = pose_limits();
     fc.task.level = 0;
-    auto ft = std::make_shared<FrameTaskModule>("tool", fc);
-    NullSpacePreferenceModuleConfig nc;
+    auto ft = std::make_shared<FrameTargetModule>("tool", fc);
+    NullSpaceModuleConfig nc;
     nc.primary = ft;
-    auto ns = std::make_shared<NullSpacePreferenceModule>("ns", nc);
+    auto ns = std::make_shared<NullSpaceModule>("ns", nc);
     JointTargetModuleConfig jc;
     jc.joints = {"j1", "j2", "j3"};
     jc.priority = 1;
@@ -2202,4 +2228,66 @@ TEST_CASE("null_space_preference module: held with its primary, off while the pr
     loop.step();
     CHECK(ns->running());
     CHECK_FALSE(active(loop.out, "ns/posture"));
+}
+
+TEST_CASE("ModuleSet::home_all: homes only the modules in control of their joints") {
+    ModelOptions o;
+    o.root = RootJoint::free_flyer;
+    ModelPtr m = load("omni_dual_arm_gripper.urdf", o);
+    ModuleSet set = make_set(m);
+    FrameTargetModuleConfig fc;
+    fc.frame = "left_tool_frame";
+    for (int i = 1; i <= 7; ++i) fc.joints.push_back("left_arm_joint_" + std::to_string(i));
+    fc.trajectory = pose_limits();
+    auto pose = std::make_shared<FrameTargetModule>("left_arm_pose", fc);
+    JointTargetModuleConfig ac;
+    ac.joints = fc.joints;
+    auto arm = std::make_shared<JointTargetModule>("left_arm_joint", ac);
+    GazeModuleConfig gc;
+    gc.frame = "head_yaw_link";
+    gc.joints = {"head_pitch_joint", "head_yaw_joint"};
+    gc.frames = {"left_tool_frame"};
+    gc.target_idle_s = 3.0;
+    auto gaze = std::make_shared<GazeModule>("gaze", gc);
+    JointTargetModuleConfig hc;
+    hc.joints = {"head_yaw_joint"};
+    auto head = std::make_shared<JointTargetModule>("head_joint", hc);
+    REQUIRE(set.add(pose));
+    REQUIRE(set.add(arm));
+    REQUIRE(set.add(gaze));
+    REQUIRE(set.add(head));
+    REQUIRE(set.configure());
+
+    Loop loop{m, set, m->neutral()};
+    auto states = [&] {
+        return std::vector<std::string>{pose->home_state(), arm->home_state(), head->home_state()};
+    };
+    const std::vector<std::string> idle{"idle", "idle", "idle"};
+
+    // No input yet: nobody controls the arm, and gaze (no home) holds the head.
+    loop.step(2);
+    REQUIRE(head->held_by());
+    REQUIRE(set.home_all());
+    loop.step();
+    CHECK(states() == idle);
+
+    // A pose target puts the pose module in control; the joint module is left alone.
+    Eigen::Isometry3d goal = pose_at(m, loop.q, "left_tool_frame");
+    goal.translation().z() += 0.02;
+    REQUIRE(pose->set_target(goal));
+    loop.step(5);
+    REQUIRE(set.home_all());
+    loop.step();
+    CHECK(states() == std::vector<std::string>{"executing", "idle", "idle"});
+    CHECK(*head->held_by() == "gaze");
+
+    // A later joint target takes the arm from the pose module.
+    loop.step(400);
+    REQUIRE(arm->set_target(Eigen::VectorXd::Zero(7)));
+    loop.step(2);
+    REQUIRE(pose->held_by());
+    REQUIRE(set.home_all());
+    loop.step();
+    CHECK(std::string(pose->home_state()) != "executing");
+    CHECK(std::string(arm->home_state()) == "executing");
 }

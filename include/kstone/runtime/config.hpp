@@ -26,7 +26,7 @@ struct EngineLoadOptions {
 /// Builds an engine from a configuration document:
 ///   model:   {file, format, root: fixed|free_flyer, mimic: independent|coupled}
 ///   rate_hz, realtime
-///   solver:  {mode, damping, limit_gain, feasibility_tol, check_feasibility, hold_retry}
+///   solver:  {mode, damping, limit_gain, feasibility_tolerance, check_feasibility, hold_retry}
 ///   robot:   {type: loopback|plugin, initial: [q...], library, params: {...}}   (initial empty = model neutral;
 ///            plugin: see kstone/runtime/robot_plugin.h)
 ///   modules: {<id>: {type: <module type>, ...params}}

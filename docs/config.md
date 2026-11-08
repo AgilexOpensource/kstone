@@ -8,7 +8,6 @@ An engine config is one YAML file. `kstone check <config.yaml>` builds the engin
 model:
   file: arm.urdf
 rate_hz: 100
-realtime: false
 robot:
   type: loopback
 modules:
@@ -23,7 +22,7 @@ modules:
 |---|---|---|
 | `model` | required | Robot model, see [model](#model) |
 | `rate_hz` | 100 | Control rate |
-| `realtime` | true | Pace cycles with the clock; `kstone run --realtime` forces it on |
+| `realtime` | false | Apply the `thread` settings (real-time scheduling) in `run()`; `kstone run --realtime` forces it on. `run()` always paces cycles to the clock |
 | `feedback_timeout_s` | 0.25 | Feedback that is older or has no timestamp is stale; 0 = never stale. See [run contract](robot.md#run-contract) |
 | `max_failed_cycles` | 5 | `run()` returns after this many consecutive failed cycles |
 | `feedback_joints` | all scalar joints | Joints whose measured position feeds the closed-loop estimate (collision, CoM, homing). Names or fnmatch patterns |
@@ -44,6 +43,7 @@ modules:
 | `root_joint_name` | `root_joint` | Name of the floating base joint |
 | `mimic` | `independent` | `independent` keeps mimic followers as ordinary DoFs; `coupled` drives them from the leader |
 | `joint_limits` | | Per-joint overrides, see below |
+| `locked_joints` | | Joints held at their initial value, see below |
 
 `joint_limits` replaces the model's limits for the named joints, so it can also widen them:
 
@@ -55,6 +55,14 @@ model:
     position:
       lower: {torso_joint_2: 0.2618}
       upper: {torso_joint_2: 2.2}
+```
+
+`locked_joints` lists joints the solver never moves. They keep their `robot.initial` value (or the neutral value), stay in the model, and are still part of the state and the command, so `joint_states` stays complete. Modules that list a locked joint keep working on the remaining joints. The floating base and coupled mimic followers cannot be listed; use `root: fixed`, or lock the leader:
+
+```yaml
+model:
+  file: robot.urdf
+  locked_joints: [left_wheel_joint, right_wheel_joint]
 ```
 
 Relative `file` paths resolve against the config file's directory first, relative `package_dirs` entries against that directory.
@@ -76,7 +84,7 @@ The command guard checks every command against the joint limits before it is wri
 | `mode` | `weighted` | How [task levels](modules/README.md#task-levels) become QP stages, see below |
 | `damping` | 1e-3 | Added to the QP Hessian diagonal, > 0 |
 | `limit_gain` | 0.5 | Fraction of the distance to a position limit usable per step, in (0, 1] |
-| `feasibility_tol` | 1e-6 | Tolerance of the feasibility check |
+| `feasibility_tolerance` | 1e-6 | Tolerance of the feasibility check |
 | `check_feasibility` | true | Check each solution against the constraints |
 | `hold_retry` | true | Retry an infeasible stage with relaxed recovery demands, then hold |
 
@@ -97,7 +105,7 @@ All solver keys can be changed at run time with `Engine.tune_solver`.
 | `library` | | Plugin shared library. A path with `/` resolves against the config file, a bare name uses the loader search path |
 | `params` | | Free-form map passed to the plugin's `create()` |
 | `initial` | model neutral | Initial q: a list of size nq, or a map `{joint: value}` over the neutral. Also the modules' initial posture |
-| `initial_root` | | Initial floating base pose `{translation, rpy}` or `{translation, quaternion}`. Not allowed with a list `initial` |
+| `initial_root` | | Initial floating base pose `{position, rpy}` or `{position, quaternion}`. Not allowed with a list `initial` |
 
 ## modules
 
@@ -116,3 +124,15 @@ modules: !include modules.yaml  # path relative to this file
 - A scalar that is exactly one placeholder is re-typed, so `${rate:-50}` becomes a number.
 - Pass variables with `kstone run/check --set name=value` (repeatable), or `vars={"name": "value"}` in the Python loaders. Every variable passed must be referenced in the config, otherwise loading fails with KST-E010.
 - Python's `load_*_from_string` loaders also expand placeholders; `base_dir` sets where relative paths and includes resolve.
+
+## Naming conventions
+
+Keys across modules follow these rules:
+
+- Durations end in `_s` (seconds); other units are given in each module's docs.
+- `max_` marks an upper bound, except inside `*_limits` groups, where every field is already a bound.
+- `_scale` is a dimensionless ratio; `_factor` is a coefficient with units (e.g. `acceleration_factor`, 1/s).
+- `speed` is a scalar magnitude; `velocity` is a vector, a per-axis rate or a limit on one.
+- Pose quantities are `position` / `orientation`; rates and limits are `linear` / `angular`.
+- Pose values are `{position, orientation}` (wxyz quaternion) on ports, and `{position, quaternion}` or `{position, rpy}` in config.
+- `velocity_limit` is the per-joint limit a joint_target plans within (the solver still enforces the model limit); `max_velocity` is an extra cap on one module's own motion, such as a trajectory's cruise speed.

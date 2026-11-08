@@ -23,7 +23,7 @@ namespace kstone {
 
 // Setters on these modules are control-thread only (call them between ModuleSet::step calls).
 
-struct FrameTaskModuleConfig {
+struct FrameTargetModuleConfig {
     std::string frame;
     /// Driven joints; empty = every joint from the root down to the frame. Non-empty also masks the task.
     std::vector<std::string> joints;
@@ -52,10 +52,10 @@ struct FrameTaskModuleConfig {
 };
 
 /// FrameTask fed by a PoseTrajectory. Without a target it holds the pose observed at reset.
-class KSTONE_EXPORT FrameTaskModule final : public Module {
+class KSTONE_EXPORT FrameTargetModule final : public Module {
   public:
-    FrameTaskModule(std::string id, FrameTaskModuleConfig config);
-    const char* type() const noexcept override { return "frame_task"; }
+    FrameTargetModule(std::string id, FrameTargetModuleConfig config);
+    const char* type() const noexcept override { return "frame_target"; }
 
     /// The rotation part must be orthonormal with determinant 1.
     Status set_target(const Eigen::Isometry3d& target);
@@ -70,7 +70,6 @@ class KSTONE_EXPORT FrameTaskModule final : public Module {
 
     /// Port "target" (pose): set_target().
     Status read_port(std::size_t index, PortValue& out) const override;
-    Status write_port(std::size_t index, const PortValue& value) override;
     Status request_home() override;
     bool homeable() const noexcept override { return true; }
     HomeStatus home_status() const noexcept { return home_.status(); }
@@ -79,8 +78,9 @@ class KSTONE_EXPORT FrameTaskModule final : public Module {
     Status tune(const ConfigNode& params) override;
     ConfigNode tunables() const override;
     ConfigNode tune_schema() const override;
-    /// Outputs: planned (point, world ramp position), lag (m, target to ramp), speed (m/s), angular_speed (rad/s),
-    /// error (m) and angular_error (rad) from the target to the frame at the evaluated q.
+    /// Outputs: planned (point, world ramp position), lag (m, target to ramp), linear_speed (m/s),
+    /// angular_speed (rad/s), position_error (m) and orientation_error (rad) from the target to the frame
+    /// at the evaluated q.
     Status update_outputs(Workspace& at) override;
     Status read_output(std::size_t index, OutputValue& out) const override;
 
@@ -92,11 +92,15 @@ class KSTONE_EXPORT FrameTaskModule final : public Module {
     Status on_preempted(const Cycle& cycle, const std::string& by) override;
     Status on_disabled(const Cycle& cycle) override;
 
+  protected:
+    Status on_write_port(std::size_t index, const PortValue& value) override;
+
   private:
+    Status apply_target(const Eigen::Isometry3d& target);
     Status observe(const Workspace& workspace, Eigen::Isometry3d& pose) const;
     Status finish(HomeStatus status);
 
-    FrameTaskModuleConfig config_, defaults_;
+    FrameTargetModuleConfig config_, defaults_;
     Eigen::Vector3d planned_{Eigen::Vector3d::Zero()};
     double lag_{0.0}, speed_{0.0}, angular_speed_{0.0}, error_{0.0}, angular_error_{0.0};
     std::shared_ptr<FrameTask> task_;
@@ -115,6 +119,9 @@ class KSTONE_EXPORT FrameTaskModule final : public Module {
     const Model* model_{nullptr};
 };
 
+/// What an idle joint_target does with its joints.
+enum class OnIdle { release, hold, claim };
+
 struct JointTargetModuleConfig {
     std::vector<std::string> joints;  ///< Scalar joints (nv == 1).
     double weight{1.0};
@@ -123,18 +130,17 @@ struct JointTargetModuleConfig {
     JointTrajectoryConfig trajectory;
     /// Per-joint profile velocity limit; empty = model limits (each must then be finite and > 0).
     Eigen::VectorXd velocity_limit;
-    double tolerance{
-        1e-3};  ///< Arrival (target and home): |target - q| below this per joint once the profile ends.
+    double position_tolerance{
+        1e-3};  ///< Arrival (target and home): per-joint |target - q| once the profile ends.
     int priority{0};
     /// When held by another module: wait keeps the target and resumes it; abort drops it (stops claiming,
     /// idle until the next set_target). An executing yielding home always aborts.
     OnHeld on_held{OnHeld::wait};
-    /// Idle (neither claiming nor homing): true holds the last target; false drops the task so others move the joints.
-    /// After yielding to new input elsewhere it never holds.
-    bool hold_idle{true};
-    /// Idle: also hold the last target and claim the joints, so conflicting modules stay held (direct joint
-    /// control). Resuming idle (e.g. on enable) starts from the measured joints.
-    bool claim_idle{false};
+    /// Idle (no new input, not homing): release drops the task so others move the joints; hold keeps the
+    /// last target until it yields to new input elsewhere; claim also claims the joints, so conflicting
+    /// modules stay held (direct joint control), and resuming idle (e.g. on enable) starts from the
+    /// measured joints.
+    OnIdle on_idle{OnIdle::hold};
     /// Input watchdog: a request for these joints within this long (s) of the last set_target() or finished home
     /// is deferred, and the joints are released once that long passes without new input. 0 = yield at once.
     double release_after_s{0.25};
@@ -152,6 +158,9 @@ class KSTONE_EXPORT JointTargetModule final : public Module {
 
     /// Clamps each bounded joint to its position limits (the port's lower/upper).
     Status set_target(const Eigen::Ref<const Eigen::VectorXd>& target);
+    /// Sets only the named joints (any subset, any order); the others keep target(), or the measured
+    /// position if the module is disabled or not running when called.
+    Status set_target(const std::vector<std::string>& joints, const Eigen::Ref<const Eigen::VectorXd>& values);
     const Eigen::VectorXd& target() const noexcept { return target_; }
     bool claiming() const noexcept { return claiming_; }
     /// The last target was reached (claim kept).
@@ -160,7 +169,6 @@ class KSTONE_EXPORT JointTargetModule final : public Module {
 
     /// Port "target" (vector, one element per joint): set_target().
     Status read_port(std::size_t index, PortValue& out) const override;
-    Status write_port(std::size_t index, const PortValue& value) override;
     Status request_home() override;
     bool homeable() const noexcept override { return true; }
     HomeStatus home_status() const noexcept { return home_.status(); }
@@ -180,7 +188,11 @@ class KSTONE_EXPORT JointTargetModule final : public Module {
     Status on_disabled(const Cycle& cycle) override;
     bool yield_control() override;
 
+  protected:
+    Status on_write_port(std::size_t index, const PortValue& value) override;
+
   private:
+    Status apply_target(const Eigen::Ref<const Eigen::VectorXd>& target);
     bool holds_claim() const noexcept;
     void measure(const Cycle& cycle);
     bool arrived(const Eigen::VectorXd& goal) const;
@@ -195,7 +207,9 @@ class KSTONE_EXPORT JointTargetModule final : public Module {
     std::vector<JointInfo> joints_;
     std::vector<bool> wrap_;
     Mask mask_;
-    Eigen::VectorXd target_, measured_, measured_v_, limit_, home_pose_;
+    Eigen::VectorXd target_, measured_, measured_v_, limit_, home_pose_, partial_;
+    std::vector<bool> seen_, fill_;  ///< fill_: omitted joints taken from measurement at the next reset().
+    bool filling_{false};
     bool has_target_{false};
     bool claiming_{false};
     bool settled_{false};
@@ -274,7 +288,7 @@ struct CenterOfMassModuleConfig {
     double recovery_speed{0.1};
     std::vector<Payload> payloads;
     /// Outside the margin only these modules' driven joints pull the CoM back (others may not push it out); also dependencies. Empty = all joints.
-    std::vector<std::shared_ptr<FrameTaskModule>> recovery_tasks;
+    std::vector<std::shared_ptr<FrameTargetModule>> recovery_tasks;
     /// Also bound the measured state (fresh feedback), on top of the commanded one.
     bool closed_loop{false};
 };
@@ -310,9 +324,9 @@ class KSTONE_EXPORT CenterOfMassModule final : public Module {
 enum class NullSpacePreference { posture, manipulability, joint_limits };
 enum class PostureReference { initial, current, neutral, custom };
 
-struct NullSpacePreferenceModuleConfig {
-    std::shared_ptr<FrameTaskModule> primary;  ///< Also a dependency.
-    std::vector<std::string> joints;           ///< Scalar joints; empty = the primary's driven scalar joints.
+struct NullSpaceModuleConfig {
+    std::shared_ptr<FrameTargetModule> primary;  ///< Also a dependency.
+    std::vector<std::string> joints;  ///< Scalar joints; empty = the primary's driven scalar joints.
     NullSpacePreference preference{NullSpacePreference::posture};
     NullSpaceSettings projector{1e-2, 0.1};
     TaskOptions task;  ///< Unset level = the primary's level.
@@ -336,10 +350,10 @@ struct NullSpacePreferenceModuleConfig {
 };
 
 /// One of three null-space preferences under a frame task; switchable at runtime without allocation.
-class KSTONE_EXPORT NullSpacePreferenceModule final : public Module {
+class KSTONE_EXPORT NullSpaceModule final : public Module {
   public:
-    NullSpacePreferenceModule(std::string id, NullSpacePreferenceModuleConfig config);
-    const char* type() const noexcept override { return "null_space_preference"; }
+    NullSpaceModule(std::string id, NullSpaceModuleConfig config);
+    const char* type() const noexcept override { return "null_space"; }
 
     std::vector<std::string> dependencies() const override;
     /// False (unchanged) for joint_limits after configure() found no bounded joints.
@@ -366,11 +380,11 @@ class KSTONE_EXPORT NullSpacePreferenceModule final : public Module {
     Status contribute(const Cycle& cycle) override;
 
   private:
-    Status posture_target(const NullSpacePreferenceModuleConfig& c, Eigen::VectorXd& out) const;
-    void clamp_neutral(const NullSpacePreferenceModuleConfig& c, Eigen::VectorXd& out) const;
+    Status posture_target(const NullSpaceModuleConfig& c, Eigen::VectorXd& out) const;
+    void clamp_neutral(const NullSpaceModuleConfig& c, Eigen::VectorXd& out) const;
     Eigen::VectorXd seed_from_q() const;
 
-    NullSpacePreferenceModuleConfig config_, defaults_;
+    NullSpaceModuleConfig config_, defaults_;
     ModelPtr model_;
     std::vector<JointInfo> infos_;
     Eigen::VectorXd initial_, last_q_, neutral_, scratch_;
@@ -387,7 +401,7 @@ class KSTONE_EXPORT NullSpacePreferenceModule final : public Module {
 
 /// Shared by self_collision and world_collision. Visuals: the robot geometries, then the obstacles.
 /// Outputs: min_distance, closest (witness points), closest_pair (the nearest pair's visuals, empty
-/// outside the band), band (visuals within d_min + activation_margin), pair (nearest pair "a/b"), pairs (checked),
+/// outside the band), band (visuals within clearance + activation_margin), pair (nearest pair "a/b"), pairs (checked),
 /// active_pairs (within the band at the latest solve).
 class KSTONE_EXPORT CollisionModuleBase : public Module {
   public:
@@ -462,7 +476,7 @@ struct WorldCollisionModuleConfig {
     bool closed_loop{false};
     /// Obstacle velocity is estimated from successive pose writes (port or set_obstacle_pose) and
     /// zeroed this long (s) after the last write; 0 keeps every obstacle static.
-    double velocity_timeout{0.2};
+    double velocity_timeout_s{0.2};
 };
 
 /// One CollisionConstraint between the robot and fixed-count obstacles; drives and claims nothing.
@@ -487,8 +501,10 @@ class KSTONE_EXPORT WorldCollisionModule final : public CollisionModuleBase {
     Status configure(ModuleSetup& setup) override;
     Status prepare(Cycle& cycle) override;
     Status read_port(std::size_t index, PortValue& out) const override;
-    Status write_port(std::size_t index, const PortValue& value) override;
     bool visual_placement(std::size_t i, Eigen::Isometry3d& placement) const override;
+
+  protected:
+    Status on_write_port(std::size_t index, const PortValue& value) override;
 
   private:
     struct Motion {
@@ -507,16 +523,16 @@ class KSTONE_EXPORT WorldCollisionModule final : public CollisionModuleBase {
 struct ChassisModuleConfig {
     ChassisConfig chassis;
     Eigen::Isometry3d center_in_root{Eigen::Isometry3d::Identity()};
-    double period{0.01};  ///< Initial scheduler period (s); each cycle then sets it to the engine dt.
+    double period_s{0.01};  ///< Initial scheduler period (s); each cycle then sets it to the engine dt.
     ChassisPoseLimits
         pose_limits;  ///< Tune-only; configure() seeds it from the controller (chassis max_* fields).
 };
 
 /// ChassisController outside the QP: locks the free-flyer root and writes its pose into q in prepare(); z = 0 is the ground contact.
 /// Starts on the first step; a skipped step (module disabled) pauses and resynchronises the controller.
-/// Port `velocity` (vx, vy, wz) and `pose_goal` (x, y, yaw in world) both lapse after command_timeout_s; the
+/// Port `velocity` (vx, vy, wz) and `pose_target` (x, y, yaw in world) both lapse after command_timeout_s; the
 /// last write of either is submitted as source "port" on the next step.
-/// Outputs: vx, vy, wz, x, y, yaw, active, fault, nominal_vx/vy/wz (unshaped target), planned (ramp pose), goal
+/// Outputs: vx, vy, wz, x, y, yaw, active, fault, nominal_vx/vy/wz (unshaped target), planned (ramp pose), target
 /// (pose command, NaN otherwise), state, reason, command (source), command_mode, command_priority, command_fresh,
 /// source (pose source), phase (differential pose phase).
 class KSTONE_EXPORT ChassisModule final : public Module {
@@ -536,8 +552,10 @@ class KSTONE_EXPORT ChassisModule final : public Module {
     Status configure(ModuleSetup& setup) override;
     Status prepare(Cycle& cycle) override;
     Status read_port(std::size_t index, PortValue& out) const override;
-    Status write_port(std::size_t index, const PortValue& value) override;
     Status read_output(std::size_t index, OutputValue& out) const override;
+
+  protected:
+    Status on_write_port(std::size_t index, const PortValue& value) override;
 
   private:
     bool fresh() const noexcept { return !command_.source.empty() && now_ <= command_.expires_at; }
@@ -551,8 +569,8 @@ class KSTONE_EXPORT ChassisModule final : public Module {
     bool stepped_{false};
     std::string source_{"port"};
     Twist2D port_command_;
-    Pose2D port_goal_;
-    std::size_t port_mode_{0};  ///< Port index of the last write: 0 velocity, 1 pose_goal.
+    Pose2D port_pose_target_;
+    std::size_t port_mode_{0};  ///< Port index of the last write: 0 velocity, 1 pose_target.
     bool port_pending_{false};
     std::optional<double> port_stamp_;  ///< Cycle time the last port command was submitted.
     double now_{0.0};

@@ -1,2 +1,2 @@
-translation: {velocity: 0.3, acceleration: 1, jerk: 10}
-rotation: {velocity: 1, acceleration: 2, jerk: 20}
+position: {velocity: 0.3, acceleration: 1, jerk: 10}
+orientation: {velocity: 1, acceleration: 2, jerk: 20}

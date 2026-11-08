@@ -37,7 +37,7 @@ using ModuleRefCollector =
 /// Module types by name, each with a parameter schema (JSON Schema) and a factory.
 class KSTONE_EXPORT ModuleRegistry {
   public:
-    /// The 8 built-in types: frame_task, joint_target, gaze, center_of_mass, null_space_preference,
+    /// The 8 built-in types: frame_target, joint_target, gaze, center_of_mass, null_space,
     /// self_collision, world_collision, chassis.
     static ModuleRegistry with_builtins();
 

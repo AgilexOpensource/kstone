@@ -28,9 +28,9 @@ KSTONE_EXPORT const char* to_string(PoseSync value) noexcept;
 
 struct PoseTrajectoryConfig {
     PoseSync sync{PoseSync::axis_phase};
-    MotionLimits translation;  ///< World axes, per-axis velocity.
-    MotionLimits rotation;     ///< Error-aligned axes.
-    /// Dimensionless: the ramp is kept at most lead_speed_scale * translation.velocity * lead_period ahead of the
+    MotionLimits position;     ///< World axes, per-axis velocity.
+    MotionLimits orientation;  ///< Error-aligned axes.
+    /// Dimensionless: the ramp is kept at most lead_speed_scale * position.velocity * lead_period ahead of the
     /// observed frame on each world axis where it leads in the direction still to go, so it does not run on while
     /// the frame is blocked. 0 = free.
     double lead_speed_scale{0.0};

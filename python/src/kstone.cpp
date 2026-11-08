@@ -114,7 +114,7 @@ py::object encode(const kstone::PortInfo& info, const kstone::PortValue& value) 
             const Eigen::Quaterniond r(value.pose.linear());
             const Eigen::Vector3d t = value.pose.translation();
             const Eigen::Vector4d wxyz(r.w(), r.x(), r.y(), r.z());
-            return py::dict("translation"_a = t, "rotation"_a = wxyz);
+            return py::dict("position"_a = t, "orientation"_a = wxyz);
         }
     }
     return py::none();
@@ -177,7 +177,7 @@ void decode(const kstone::PortInfo& info, py::handle obj, kstone::PortValue& out
                 expected = std::to_string(info.size()) + " finite numbers";
                 break;
             case PortType::pose:
-                expected = "{'translation': [x, y, z], 'rotation': [w, x, y, z]} or a 4x4 rigid transform";
+                expected = "{'position': [x, y, z], 'orientation': [w, x, y, z]} or a 4x4 rigid transform";
                 break;
         }
         raise(kstone::make_error(ErrorCode::invalid_argument,
@@ -215,9 +215,9 @@ void decode(const kstone::PortInfo& info, py::handle obj, kstone::PortValue& out
                     return;
                 }
                 const py::dict d = py::reinterpret_borrow<py::dict>(obj);
-                if (d.size() != 2 || !d.contains("translation") || !d.contains("rotation")) bad();
-                const Eigen::VectorXd t = d["translation"].cast<Eigen::VectorXd>();
-                const Eigen::VectorXd r = d["rotation"].cast<Eigen::VectorXd>();
+                if (d.size() != 2 || !d.contains("position") || !d.contains("orientation")) bad();
+                const Eigen::VectorXd t = d["position"].cast<Eigen::VectorXd>();
+                const Eigen::VectorXd r = d["orientation"].cast<Eigen::VectorXd>();
                 if (t.size() != 3 || r.size() != 4 || !t.allFinite() || !r.allFinite()) bad();
                 Eigen::Quaterniond q(r[0], r[1], r[2], r[3]);
                 if (q.norm() < 1e-9) bad();
@@ -616,7 +616,7 @@ void run(PyEngine& e, double duration_s) {
 }  // namespace
 
 PYBIND11_MODULE(_core, m) {
-    m.doc() = "Native core of kstone; import kstone instead";
+    m.doc() = "Compiled core of kstone; import kstone instead";
     m.attr("__version__") = kstone::library_version_string();
     m.attr("SNAPSHOT_SCHEMA_VERSION") = kstone::snapshot_schema_version;
 
@@ -639,7 +639,7 @@ PYBIND11_MODULE(_core, m) {
             "id", [](const PyModule& s) { return s.module->id(); }, "Module id from the config.")
         .def_property_readonly(
             "type", [](const PyModule& s) { return std::string(s.module->type()); },
-            "Module type, e.g. 'frame_task'.")
+            "Module type, e.g. 'frame_target'.")
         .def("__repr__",
              [](const PyModule& s) {
                  return "<kstone.Module '" + s.module->id() + "' type=" + std::string(s.module->type()) + ">";
@@ -710,8 +710,8 @@ Args:
     name: Port name; see ports.
 
 Returns:
-    A float, bool or array, or for a pose {'translation': [x, y, z],
-    'rotation': [w, x, y, z]}.)doc")
+    A float, bool or array, or for a pose {'position': [x, y, z],
+    'orientation': [w, x, y, z]}.)doc")
         .def(
             "write_port",
             [](const PyModule& s, const std::string& name, py::handle value) {
@@ -727,7 +727,7 @@ Returns:
 Args:
     name: Port name; see ports.
     value: A float, bool or sequence of the port's size. A pose takes a 4x4
-        matrix or {'translation': [x, y, z], 'rotation': [w, x, y, z]}.
+        matrix or {'position': [x, y, z], 'orientation': [w, x, y, z]}.
 
 Example:
     engine.module("arm").write_port("target", [0.5, 0.0, 0.0]))doc")
@@ -850,7 +850,7 @@ Args:
             "rate_hz", [](const PyEngine& e) { return e.engine.options().rate_hz; }, "Cycle rate in Hz.")
         .def_property_readonly(
             "realtime", [](const PyEngine& e) { return e.engine.options().realtime; },
-            "Whether run() paces cycles to wall-clock time.")
+            "Whether run() applies the thread (real-time scheduling) settings.")
         .def_property_readonly(
             "feedback_timeout_s", [](const PyEngine& e) { return e.engine.options().feedback_timeout_s; },
             "Feedback older than this counts as stale.")
@@ -882,6 +882,13 @@ Args:
             "solver_tune_schema",
             [](const PyEngine& e) { return to_py(e.engine.modules().solver_tune_schema()); },
             "JSON Schema of the tune_solver() parameters.")
+        .def(
+            "home_all",
+            [](PyEngine& e) {
+                e.idle();
+                check(e.engine.modules().home_all());
+            },
+            "Home every homeable module currently in control (not held by another module); watch home_state.")
         .def(
             "tune_solver",
             [](PyEngine& e, const py::dict& params) {
@@ -1052,7 +1059,7 @@ Args:
             "Reset stats; time is kept.")
         .def("snapshot", &snapshot, "State of the last cycle as one dict; works while run() is active.")
         .def("run", &run, "duration_s"_a = 0.0,
-             R"doc(Run cycles, paced to wall-clock time if realtime is set.
+             R"doc(Run cycles, paced to the wall clock.
 
 Args:
     duration_s: Engine time to run in seconds; 0 runs until stop() or Ctrl-C.)doc")
@@ -1062,7 +1069,7 @@ Args:
             "serve",
             [](const std::shared_ptr<PyEngine>& e, const std::string& host, std::uint16_t port,
                const std::optional<std::filesystem::path>& urdf, double publish_hz, const std::string& token,
-               double command_timeout_s, bool assets) {
+               double command_timeout_s, bool assets, double api_hold_s) {
                 e->idle();
                 kstone::DebugServerOptions o;
                 o.host = host;
@@ -1072,12 +1079,13 @@ Args:
                 o.token = token;
                 o.command_timeout_s = command_timeout_s;
                 o.serve_assets = assets;
+                o.api_hold_s = api_hold_s;
                 auto server = kstone::DebugServer::start(e->engine, o);
                 if (!server) raise(std::move(server).error());
                 return PyServer{e, std::move(*server)};
             },
             "host"_a = "127.0.0.1", "port"_a = 7311, "urdf"_a = py::none(), "publish_hz"_a = 30.0,
-            "token"_a = "", "command_timeout_s"_a = 1.0, "assets"_a = true,
+            "token"_a = "", "command_timeout_s"_a = 1.0, "assets"_a = true, "api_hold_s"_a = 1.0,
             R"doc(Start the debug server used by the viewer and remote tools.
 
 Args:
@@ -1090,6 +1098,8 @@ Args:
     command_timeout_s: How long a remote command stays in effect when the
         client sets no timeout.
     assets: Let clients download the URDF and the files it references.
+    api_hold_s: How long after code writes a motion port (frame or joint
+        target, chassis motion) the server rejects remote writes to it (0 to 60 s).
 
 Returns:
     The server; it runs until server.stop().)doc");

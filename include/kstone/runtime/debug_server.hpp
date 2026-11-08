@@ -25,6 +25,8 @@ struct DebugServerOptions {
     /// Shared secret (16..1024 bytes); empty = no authentication. Sent in clear text: use a trusted network or tunnel.
     std::string token;
     double command_timeout_s{1.0};  ///< Default for commands without "timeout_s".
+    /// A motion port (PortInfo::api_priority) written by the application is held for this long; in [0, 60].
+    double api_hold_s{1.0};
 };
 
 /// Remote control/inspection channel for one engine, protocol version 1.
@@ -49,31 +51,31 @@ struct DebugServerOptions {
 ///   params {module, values}  to every client after a successful tune, and the latest one per module right after model;
 ///   solver_params {values}  likewise after a successful tune_solver;
 ///   joint_limits {values}  likewise after a successful tune_limits;
-///   lease  {holder, mine}  after auth and whenever the control lease changes;
 ///   state  {time, paused, fresh, rate_hz, stats {name: value}, q (measured), q_command, modules, residuals}  per subscription
-///          (default publish_hz); each module's display is null (no outputs or visuals, or not computed yet) or
-///          {at ("measured" when fresh, else "command"), outputs {name: value}, visual_poses [{translation, rotation (wxyz)} or null (hidden)]},
+///          (default publish_hz); each module has api_held [port names] (see api_hold_s), and its display is
+///          null (no outputs or visuals, or not computed yet) or {at ("measured" when fresh, else "command"), outputs {name: value}, visual_poses [{position, orientation (wxyz)} or null (hidden)]},
 ///          recomputed at most at publish_hz; point = [x,y,z], segment/polygon = list of points, visuals = indices;
 ///          residuals [{name (solver task), module (owner id or null), task (name within the module), level, residual}];
 ///          a client that reads slower than its rate skips state ticks; one with 8 MiB of other output queued is closed.
 ///   reply  {id, ok, code?, error?}  for every request, matched by id (order is not guaranteed).
 /// Client -> server, all {"op": ..., "id": any}:
 ///   auth {token}; ping; subscribe {rate_hz in [0, publish_hz], 0 = off};
-///   acquire {force?}; release;
 ///   set_port {module, port, value}; set_enabled {module, enabled}; home {module};
+///   home_all: ModuleSet::home_all (homes the homeable modules currently in control).
 ///   tune {module, params (partial map, all-or-nothing)}  with optional timeout_s; tune_solver {params} likewise;
 ///          tune_limits {params} (ModuleSet::tune_joint_limits, tighten only) likewise.
 ///   pause {paused}: hold the robot (see Engine::set_paused); step {cycles in [1, 1e6], default 1}: step the modules
 ///          while paused (invalid_argument when running).
 ///   set_rate {rate_hz in [1, 10000]}: Engine::set_rate_hz, applied at the next cycle.
-///   asset {name, offset?}  -> reply {data (base64, <= 256 KiB), offset, total}; no lease needed.
+///   asset {name, offset?}  -> reply {data (base64, <= 256 KiB), offset, total}.
 /// Unknown ops are answered with code "unsupported".
 /// At most 8 clients; a further connection gets reply {id: null, code "busy"} instead of hello and is closed.
 /// Before auth only "auth" is accepted; a bad token or an unauthenticated connection after 5 s is closed.
-/// Commands are rejected ("lease_held") while another client holds the lease; with no holder anyone may command.
-/// Leases are released on disconnect. Codes: ErrorCode names, unauthorized, lease_held, busy, timeout.
+/// Clients are equal and the last write wins. Only motion ports (frame/joint targets, chassis motion) give the
+/// application priority: while one is held, set_port to any motion port of that module is rejected ("api_owned")
+/// and never replayed. Codes: ErrorCode names, unauthorized, api_owned, busy, timeout.
 /// Socket IO runs on its own thread; the control thread only touches preallocated, lock-free buffers,
-/// except tune, tune_solver and tune_limits, which allocate on the control thread during that cycle.
+/// except tune, tune_solver, tune_limits and home_all, which allocate on the control thread during that cycle.
 class KSTONE_EXPORT DebugServer final : public EngineObserver {
   public:
     /// Binds, starts the IO thread and registers itself as an observer (so not while the engine runs).

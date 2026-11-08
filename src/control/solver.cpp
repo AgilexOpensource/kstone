@@ -70,8 +70,9 @@ Status validate_options(const Model& model, const SolverOptions& o) {
     }
     if (o.locked.size() != 0 && o.locked.size() != static_cast<std::size_t>(nv))
         return make_error(ErrorCode::invalid_argument, "solver: locked mask must be empty or size nv");
-    if (!std::isfinite(o.feasibility_tol) || o.feasibility_tol <= 0)
-        return make_error(ErrorCode::invalid_argument, "solver: feasibility_tol must be finite and > 0");
+    if (!std::isfinite(o.feasibility_tolerance) || o.feasibility_tolerance <= 0)
+        return make_error(ErrorCode::invalid_argument,
+                          "solver: feasibility_tolerance must be finite and > 0");
     return {};
 }
 
@@ -561,7 +562,7 @@ Status Solver::Impl::check_finite(const Eigen::VectorXd& x, const char* what) co
 }
 
 int Solver::Impl::check_feasible() const {
-    const double tol = options.feasibility_tol;
+    const double tol = options.feasibility_tolerance;
     const Eigen::VectorXd& x = solution.x;
     if (x.size() != problem.variables() || !x.allFinite()) return kExitBoxViolated;
     for (Index i = 0; i < x.size(); ++i)
@@ -576,7 +577,7 @@ int Solver::Impl::check_feasible() const {
 }
 
 bool Solver::Impl::hold_admissible() const {
-    const double tol = options.feasibility_tol;
+    const double tol = options.feasibility_tolerance;
     for (Index i = 0; i < problem.variables(); ++i)
         if (problem.lb[i] > tol || problem.ub[i] < -tol) return false;
     for (Index i = 0; i < hard_rows; ++i)

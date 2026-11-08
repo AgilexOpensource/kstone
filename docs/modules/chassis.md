@@ -2,14 +2,14 @@
 
 [中文](../zh-CN/modules/chassis.md) · [Module overview](README.md)
 
-Planar base controller running outside the QP. It locks the free-flyer root and writes the base pose into q in prepare(); z = 0 is the ground. It supports velocity commands and pose goals, with command leases, priority arbitration, Ruckig shaping, dead reckoning and odometry override.
+Planar base controller running outside the QP. It locks the free-flyer root and writes the base pose into q in prepare(); z = 0 is the ground. It supports velocity commands and pose targets, with command leases, priority arbitration, Ruckig shaping, dead reckoning and odometry override.
 
 ## Ports
 
 | Port | Type | Description |
 |---|---|---|
 | `velocity` | vector `[vx, vy, wz]` | Body-frame velocity |
-| `pose_goal` | vector `[x, y, yaw]` | Pose goal in the world |
+| `pose_target` | vector `[x, y, yaw]` | Pose target in the world |
 
 Both ports lapse after `command_timeout_s`. The last one written is submitted on the next step with source `port`.
 
@@ -19,14 +19,14 @@ Config lives in the `chassis:` sub-object:
 
 - `kinematics`: `omni` or `differential`.
 - `base_frame`: frame of the control centre, default `base_link`.
-- `max_linear`, `max_angular` and the matching `*_acceleration`, `*_deceleration`, `*_reversal_deceleration`, `*_jerk`: limits. Velocity mode uses them directly, and they seed the initial pose-mode limits.
-- `arrival_position_tolerance`, `arrival_rotation_tolerance`: arrival check, default 0.01 m and 0.02 rad.
-- `target_translation_deadband`, `target_rotation_deadband`: differential only; goal changes below these keep the current path.
+- `max_linear_velocity`, `max_angular_velocity` and the matching `*_acceleration`, `*_deceleration`, `*_reversal_deceleration`, `*_jerk`: limits. Velocity mode uses them directly, and they seed the initial pose-mode limits.
+- `position_tolerance`, `orientation_tolerance`: arrival check, default 0.01 m and 0.02 rad.
+- `target_position_deadband`, `target_orientation_deadband`: differential only; target changes below these keep the current path.
 - `command_timeout_s` (default 0.25): a command not refreshed for this long clears motion with reason `command_timeout`. This is not a fault.
 - `odom_timeout_s` (default 0.25): odometry older than this is rejected. Between odometry updates the pose is dead-reckoned from the output velocity.
 - `max_dt_s` (0.1), `allowed_missed_cycles` (2): a gap between steps longer than `max(max_dt_s, period × allowed_missed_cycles)` faults with `scheduler_discontinuity`. Inside the module, only a skipped step (disable, then enable) resynchronises and recovers.
 
-Top level: `center_in_root` (fixed pose of the control centre in the root frame), `period` (initial period; afterwards the engine dt is used each cycle).
+Top level: `center_in_root` (fixed pose of the control centre in the root frame), `period_s` (initial period; afterwards the engine dt is used each cycle).
 
 ### pose_limits (tune only)
 
@@ -48,24 +48,24 @@ chassis:
   chassis:
     kinematics: omni
     base_frame: base_link
-    max_linear: 1.0
-    max_angular: 3.0
+    max_linear_velocity: 1.0
+    max_angular_velocity: 3.0
     max_linear_acceleration: 2.5
-    arrival_position_tolerance: 0.001
-    arrival_rotation_tolerance: 0.002
+    position_tolerance: 0.001
+    orientation_tolerance: 0.002
 ```
 
 ```python
 ch = e.module("chassis")
 ch.write_port("velocity", [0.2, 0.0, 0.0])  # keep writing within command_timeout_s
-ch.write_port("pose_goal", [1.0, 0.0, 0.0])
-ch.tune({"pose_limits": {"linear_velocity": 0.3, "planner_mode": "axis_time"}})
+ch.write_port("pose_target", [1.0, 0.0, 0.0])
+ch.tune({"pose_limits": {"max_linear_velocity": 0.3, "planner_mode": "axis_time"}})
 ```
 
 ## Outputs
 
 - `vx`, `vy`, `wz`: shaped velocity. `x`, `y`, `yaw`: pose. `nominal_vx/vy/wz`: unshaped target velocity.
-- `planned`: current trajectory pose. `goal`: pose goal, NaN outside pose mode.
+- `planned`: current trajectory pose. `target`: pose target, NaN outside pose mode.
 - `active`, `fault`, `state`, `reason`: state and its cause.
 - `command` (command source), `command_mode`, `command_priority`, `command_fresh`.
 - `source`: pose source (internal estimate or odometry). `phase`: differential pose-mode phase.

@@ -1,12 +1,12 @@
-# null_space_preference
+# null_space
 
-[English](../../modules/null_space_preference.md) · [模块总览](README.md)
+[English](../../modules/null_space.md) · [模块总览](README.md)
 
-在一个 frame_task（`primary`）的零空间里施加偏好，不影响该任务的末端跟踪。运行时可切换偏好，不分配内存。
+在一个 frame_target（`primary`）的零空间里施加偏好，不影响该任务的末端跟踪。运行时可切换偏好，不分配内存。
 
 ## 关键参数
 
-- `primary`：frame_task 的 id，同时是本模块的依赖。`joints` 为空时取 primary 驱动的标量关节。
+- `primary`：frame_target 的 id，同时是本模块的依赖。`joints` 为空时取 primary 驱动的标量关节。
 - `preference`：
   - `posture`：靠近参考姿态。
   - `manipulability`：提高可操作度，`manipulability_axes` 选参与的方向（默认只看平移）。
@@ -28,7 +28,7 @@
 
 ```yaml
 left_null:
-  type: null_space_preference
+  type: null_space
   primary: left
   reference: initial
   posture_weight: 0.05
@@ -44,6 +44,6 @@ null.tune({"preference": "joint_limits"})
 
 ## 常见坑
 
-- 只在没有其他模块占有其关节时运行。示例里 `left_arm`（joint_target，`claim_idle: true`）占着左臂，`left_null` 一直 held。
+- 只在没有其他模块占有其关节时运行。示例里 `left_arm`（joint_target，`on_idle: claim`）占着左臂，`left_null` 一直 held。
 - 偏好在零空间里，不会牺牲 primary 的精度；但 primary 有轴被放开（权重 0）时，这些轴也属于零空间，偏好会推动它们。
 - 参考姿态与目标位姿相差很远时，偏好只能在冗余自由度里尽量靠近，关节不会到达参考值。

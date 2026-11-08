@@ -16,4 +16,5 @@ while IFS= read -r d; do deps+=("-D$d"); done < <(
 cmake -S tests/consumer -B "$tmp/build" -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_PREFIX_PATH="$tmp/prefix" "${deps[@]}" > /dev/null
 cmake --build "$tmp/build"
-"$tmp/build/consumer" tests/fixtures/arm.urdf
+# A stray LD_LIBRARY_PATH (e.g. ROS) can load a mismatched pinocchio.
+env -u LD_LIBRARY_PATH "$tmp/build/consumer" tests/fixtures/arm.urdf

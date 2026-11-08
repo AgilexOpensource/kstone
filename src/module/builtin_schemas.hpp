@@ -6,11 +6,11 @@
 // Internal: parameter schemas of the builtin modules, shared by the registry and the modules' tune().
 namespace kstone::builtin_schemas {
 
-const ParamSchema<FrameTaskModuleConfig>& frame_task();
+const ParamSchema<FrameTargetModuleConfig>& frame_target();
 const ParamSchema<JointTargetModuleConfig>& joint_target();
 const ParamSchema<GazeModuleConfig>& gaze();
 const ParamSchema<CenterOfMassModuleConfig>& center_of_mass();
-const ParamSchema<NullSpacePreferenceModuleConfig>& null_space_preference();
+const ParamSchema<NullSpaceModuleConfig>& null_space();
 /// Only the runtime-tunable `constraint` map; the registry reads the URDF-based parameters separately.
 const ParamSchema<SelfCollisionModuleConfig>& self_collision();
 const ParamSchema<WorldCollisionModuleConfig>& world_collision();

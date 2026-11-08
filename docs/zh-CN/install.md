@@ -105,7 +105,7 @@ target_link_libraries(my_node PRIVATE kstone::kstone)
 `kstone doctor`（加 `--json` 输出 JSON）或 Python 里的 `kstone.doctor(print=True)` 报告：
 
 - kstone 版本、构建类型，以及编译时的 Eigen、Pinocchio、Coal 版本。
-- 进程里加载的原生库及其来源（pypi、ros、system、other）。
+- 进程里加载的共享库及其来源（pypi、ros、system、other）。
 - 一次求解和碰撞距离冒烟测试的结果。
 
 同一个库被加载两份、或 Pinocchio 与 Coal 来自不同来源时检查失败：CLI 退出码为 1，Python 返回的 dict 里 `ok` 为 `False`。加载库扫描只在 Linux 上可用。

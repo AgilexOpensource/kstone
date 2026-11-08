@@ -10,34 +10,34 @@
 namespace kstone {
 
 struct CollisionConstraintOptions {
-    double d_min{0.03};              ///< Distance kept between pairs (m), >= 0.
-    double gain{50.0};               ///< Allowed approach speed per metre above d_min (1/s), >= 0.
-    double activation_margin{0.05};  ///< Rows appear within d_min + margin (m), >= 0.
+    double clearance{0.03};          ///< Distance kept between pairs (m), >= 0.
+    double gain{50.0};               ///< Allowed approach speed per metre above clearance (1/s), >= 0.
+    double activation_margin{0.05};  ///< Rows appear within clearance + margin (m), >= 0.
     double hysteresis{0.005};        ///< An active pair stays active up to this much further (m), >= 0.
-    /// Braking deceleration (m/s^2); > 0 lets a pair approach at up to sqrt(2 a (d - d_min)),
+    /// Braking deceleration (m/s^2); > 0 lets a pair approach at up to sqrt(2 a (d - clearance)),
     /// capped at half the remaining gap per step. 0 disables it.
     double approach_deceleration{5.0};
     Index max_rows{16};  ///< Fixed row count; nearest pairs win, > 0.
     /// Extra rows for cutting planes, >= 0 (0 disables them). A step whose end leaves a pair below its
-    /// floor (d_min, or the recovery share of a pair that started inside d_min) is re-solved with that
+    /// floor (clearance, or the recovery share of a pair that started inside clearance) is re-solved with that
     /// pair relinearized at the rejected end: the start-linearized row lets curved (sliding, rotating)
-    /// steps dip below d_min.
+    /// steps dip below clearance.
     Index max_cuts{8};
-    /// Endpoint clip floor below d_min (m), >= 0: a step end is shortened if some pair would end below
-    /// min(d_min, its start distance) - clip_slack. A slack lets small steps skip the check and can deepen a penetration.
+    /// Endpoint clip floor below clearance (m), >= 0: a step end is shortened if some pair would end below
+    /// min(clearance, its start distance) - clip_slack. A slack lets small steps skip the check and can deepen a penetration.
     double clip_slack{0.0};
     /// A pair already penetrating when it enters the activation band (first step, obstacle enabled, constraint
-    /// re-enabled) gets no row, cut or clip floor until it is back beyond d_min: it can be moved out, or deeper.
-    /// false: it is pushed out like any pair inside d_min, which a deep start may not allow (held or frozen steps).
+    /// re-enabled) gets no row, cut or clip floor until it is back beyond clearance: it can be moved out, or deeper.
+    /// false: it is pushed out like any pair inside clearance, which a deep start may not allow (held or frozen steps).
     bool exempt_penetrating{true};
 };
 
-/// Keeps every selected pair at least d_min apart: per active pair one row
-/// d_dot = J v >= -rate, rate = gain (d - d_min). Unused rows are unbounded.
-/// A pair is active within d_min + activation_margin (+ hysteresis while it stays active).
+/// Keeps every selected pair at least clearance apart: per active pair one row
+/// d_dot = J v >= -rate, rate = gain (d - clearance). Unused rows are unbounded.
+/// A pair is active within clearance + activation_margin (+ hysteresis while it stays active).
 /// Endpoint clip: if the cut passes did not verify the step end (held step, cut budget spent, failed
 /// re-solve) and a rigid-motion bound of the step could bring some pair below its clip floor
-/// (min(d_min, its start distance) - clip_slack), the solver shortens the step until none does.
+/// (min(clearance, its start distance) - clip_slack), the solver shortens the step until none does.
 /// An obstacle's approaching velocity (CollisionWorld::set_velocity) raises its rows by the closing speed
 /// at the witness point; cuts and the clip take obstacles as static within a step.
 class KSTONE_EXPORT CollisionConstraint final : public Constraint {

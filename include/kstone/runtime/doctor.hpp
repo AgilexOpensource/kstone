@@ -14,7 +14,7 @@ struct DoctorCheck {
     std::string detail;
 };
 
-/// A native library mapped into the process.
+/// A shared library mapped into the process.
 struct LoadedLibrary {
     std::string name;  ///< File name, e.g. libpinocchio_default.so.4.1.0.
     std::string path;

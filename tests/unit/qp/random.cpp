@@ -116,7 +116,7 @@ struct Tally {
     int beaten = 0;  // a sampled hard-feasible point was lexicographically better
 };
 
-// No native reference: probe the fallback's answer with hard-feasible points on segments
+// No reference solver: probe the fallback's answer with hard-feasible points on segments
 // toward random box points and with small perturbations. By convexity a better point would
 // show up along such segments if the answer were not lexicographically optimal.
 Tally probe(bool with_inequalities, int trials, unsigned seed) {

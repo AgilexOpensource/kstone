@@ -12,7 +12,7 @@ log/
 .cache/
 CMakeUserPresets.json
 
-# Native artifacts
+# Build artifacts
 *.so
 *.a
 *.o

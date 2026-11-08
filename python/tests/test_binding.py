@@ -230,30 +230,42 @@ assert np.allclose(arm.read_port(target["name"]), [0.3, -0.2, 0.1])
 
 tool = e.module("tool")
 pose = next(p for p in tool.ports if p["type"] == "pose")
-expect_error("invalid_argument", tool.write_port, pose["name"], {"translation": [0, 0, 0]})
+expect_error("invalid_argument", tool.write_port, pose["name"], {"position": [0, 0, 0]})
 msg = expect_error("invalid_argument", tool.write_port, pose["name"], [0.3, -0.2, 0.1])
-assert "'translation'" in msg and "'rotation'" in msg, msg
+assert "'position'" in msg and "'orientation'" in msg, msg
 assert "3 finite numbers" in expect_error("invalid_argument", arm.write_port, target["name"], "abc")
-expect_error("invalid_argument", tool.write_port, pose["name"], {"translation": [0, 0, 0], "rotation": [0, 0, 0, 0]})
-expect_error("invalid_argument", tool.write_port, pose["name"], {"translation": [0, 0, 0], "rotation": [1, 0, 0, 0], "frame": "x"})
+expect_error("invalid_argument", tool.write_port, pose["name"], {"position": [0, 0, 0], "orientation": [0, 0, 0, 0]})
+expect_error("invalid_argument", tool.write_port, pose["name"], {"position": [0, 0, 0], "orientation": [1, 0, 0, 0], "frame": "x"})
 expect_error("invalid_argument", arm.write_port, target["name"], [True, False, True])
 value = tool.read_port(pose["name"])
-assert value["translation"].shape == (3,) and value["rotation"].shape == (4,)
+assert value["position"].shape == (3,) and value["orientation"].shape == (4,)
 transform = np.eye(4)
 transform[:3, :3] = [[0, -1, 0], [1, 0, 0], [0, 0, 1]]
 transform[:3, 3] = [0.1, 0.2, 0.3]
 tool.write_port(pose["name"], transform)
 value = tool.read_port(pose["name"])
-assert np.allclose(value["translation"], [0.1, 0.2, 0.3])
-assert np.allclose(np.abs(value["rotation"]), [np.sqrt(0.5), 0, 0, np.sqrt(0.5)])
+assert np.allclose(value["position"], [0.1, 0.2, 0.3])
+assert np.allclose(np.abs(value["orientation"]), [np.sqrt(0.5), 0, 0, np.sqrt(0.5)])
 for bad in (np.eye(3), np.diag([2.0, 1, 1, 1]), np.diag([-1.0, 1, 1, 1])):
     expect_error("invalid_argument", tool.write_port, pose["name"], bad)
 
 assert arm.homeable and arm.tunable and arm.tune_schema["type"] == "object"
 assert arm.home_state == "idle"
+h = kstone.load_engine(fixtures / "arm_loopback.yaml")
+h.step()
+homes = lambda: [h.module(m).home_state for m in ("tool", "arm", "fingers")]
+h.home_all()
+h.step()
+assert homes() == ["idle", "idle", "idle"]
+fingers = h.module("fingers")
+fingers.write_port(next(p["name"] for p in fingers.ports if p["type"] == "vector"), [0.01])
+h.step()
+h.home_all()
+h.step()
+assert homes() == ["idle", "idle", "executing"]
 out = tool.outputs(e.model.neutral())
 assert out["planned"].shape == (3,) and isinstance(out["lag"], float)
-assert isinstance(out["error"], float) and isinstance(out["angular_error"], float)
+assert isinstance(out["position_error"], float) and isinstance(out["orientation_error"], float)
 assert arm.outputs(e.model.neutral()) == {}
 assert arm.visuals() == []
 world_cfg = """model: {file: slider_collision.urdf}
@@ -264,7 +276,7 @@ modules:
     type: world_collision
     urdf: slider_collision.urdf
     obstacles:
-      - {name: table, shape: {type: box, size: [0.4, 0.6, 0.02]}, pose: {translation: [0.5, 0, 0.3]}}
+      - {name: table, shape: {type: box, size: [0.4, 0.6, 0.02]}, pose: {position: [0.5, 0, 0.3]}}
       - {name: post, shape: {type: cylinder, size: [0.05, 0.5, 0]}, enabled: false}
 """
 world = kstone.load_engine_from_string(world_cfg, base_dir=fixtures).module("world")
@@ -273,7 +285,7 @@ assert table["name"] == "table" and table["frame"] == "" and table["shape"]["typ
 assert np.allclose(table["shape"]["size"], [0.4, 0.6, 0.02]) and "vertices" not in table["shape"]
 assert table["placement"].shape == (4, 4) and np.allclose(table["placement"][:3, 3], [0.5, 0, 0.3])
 assert post["shape"]["type"] == "cylinder" and post["placement"] is None
-world.write_port("table", {"translation": [0.6, 0.1, 0.3], "rotation": [1, 0, 0, 0]})
+world.write_port("table", {"position": [0.6, 0.1, 0.3], "orientation": [1, 0, 0, 0]})
 world.write_port("post/enabled", True)
 table, post = world.visuals()
 assert np.allclose(table["placement"][:3, 3], [0.6, 0.1, 0.3]) and np.allclose(post["placement"], np.eye(4))

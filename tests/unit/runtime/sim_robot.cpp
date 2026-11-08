@@ -134,7 +134,7 @@ TEST_CASE("sim robot: injected into a fixture engine, joint targets still conver
     Eigen::VectorXd target(3);
     target << 0.5, -0.3, 1.0;
     REQUIRE(arm_module->set_target(target));
-    REQUIRE(e->run(20.0));
+    for (int i = 0; i < 2000; ++i) REQUIRE(e->step(e->stats().time + e->dt()));
     const Model& em = *e->modules().model();
     CHECK(*em.joint_position(e->state().q, *em.joint_id("j1")) == doctest::Approx(0.5).epsilon(1e-3));
     CHECK(*em.joint_position(e->state().q, *em.joint_id("j2")) == doctest::Approx(-0.3).epsilon(1e-3));

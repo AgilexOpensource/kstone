@@ -69,13 +69,13 @@ using SteadyClock = std::chrono::steady_clock;
 
 constexpr int kProtocolVersion = 1;
 constexpr const char* kCommandOps[] = {"set_port", "set_enabled", "home",     "tune",       "tune_solver",
-                                       "pause",    "step",        "set_rate", "tune_limits"};
+                                       "pause",    "step",        "set_rate", "tune_limits", "home_all"};
 constexpr double kMaxTimeoutS = 60.0;
 constexpr auto kAuthGrace = std::chrono::seconds(5);  // Unauthenticated connections are dropped after this.
 constexpr std::size_t kMinToken = 16;
 constexpr std::size_t kMaxToken = 1024;
 
-enum class Op { set_port, set_enabled, home, tune, tune_solver, pause, step, set_rate, tune_limits };
+enum class Op { set_port, set_enabled, home, tune, tune_solver, pause, step, set_rate, tune_limits, home_all };
 constexpr double kMaxStepCycles = 1e6;
 constexpr double kMaxRateHz = 1e4;
 
@@ -98,6 +98,7 @@ struct Reply {
     bool applied{true};  ///< False when the IO thread already answered with a timeout.
     bool ok{true};
     ErrorCode code{ErrorCode::internal};
+    const char* protocol_code{nullptr};  ///< Overrides `code` (api_owned).
     std::array<char, 256> message{};
     std::size_t module{0};
     Op op{Op::tune};    ///< values are module tunables (tune), solver options (tune_solver) or joint limits.
@@ -129,6 +130,7 @@ struct ModuleFrame {
     std::uint64_t preempted{0};
     const char* home_state{nullptr};
     std::vector<PortValue> ports;
+    std::vector<char> api_held;
 };
 
 struct Snapshot {
@@ -220,8 +222,8 @@ ConfigNode pose_node(const Eigen::Isometry3d& pose) {
     const Eigen::Quaterniond r(pose.linear());
     const Eigen::Vector3d t = pose.translation();
     ConfigNode node = ConfigNode::map();
-    node.set("translation", numbers(t));
-    node.set("rotation", ConfigNode::list({r.w(), r.x(), r.y(), r.z()}));
+    node.set("position", numbers(t));
+    node.set("orientation", ConfigNode::list({r.w(), r.x(), r.y(), r.z()}));
     return node;
 }
 
@@ -290,7 +292,7 @@ Status decode(const PortInfo& port, const ConfigNode* node, PortValue& out) {
             expected = std::to_string(port.size()) + " finite numbers";
             break;
         case PortType::pose:
-            expected = R"({"translation": [x, y, z], "rotation": [w, x, y, z]})";
+            expected = R"({"position": [x, y, z], "orientation": [w, x, y, z]})";
             break;
     }
     const Error bad =
@@ -312,7 +314,7 @@ Status decode(const PortInfo& port, const ConfigNode* node, PortValue& out) {
         case PortType::pose: {
             Eigen::VectorXd t, r;
             if (node->kind() != ConfigNode::Kind::map || node->size() != 2) return bad;
-            if (!read_numbers(node->find("translation"), 3, t) || !read_numbers(node->find("rotation"), 4, r))
+            if (!read_numbers(node->find("position"), 3, t) || !read_numbers(node->find("orientation"), 4, r))
                 return bad;
             Eigen::Quaterniond quat(r[0], r[1], r[2], r[3]);
             if (quat.norm() < 1e-9) return bad;
@@ -385,7 +387,10 @@ struct DebugServer::Impl {
 
     std::vector<Client> clients;
     std::uint64_t next_id{1};
-    std::uint64_t lease{0};  ///< Client id holding the control lease; 0 = none.
+    // Control thread: per port, write_count() as last seen and the time of the last API write.
+    std::vector<std::vector<std::uint64_t>> seen_writes;
+    std::vector<std::vector<SteadyClock::time_point>> api_writes;
+    SteadyClock::duration api_hold{};
     std::uint64_t snapshot_seq{0};
 
     ~Impl() { close_all(); }
@@ -409,6 +414,7 @@ struct DebugServer::Impl {
             s.modules.resize(mods.size());
             for (std::size_t m = 0; m < mods.size(); ++m) {
                 s.modules[m].ports.resize(ports[m].size());
+                s.modules[m].api_held.assign(ports[m].size(), 0);
                 for (std::size_t p = 0; p < ports[m].size(); ++p)
                     if (ports[m][p].type == PortType::vector)
                         s.modules[m].ports[p].vector.setZero(ports[m][p].size());
@@ -609,17 +615,50 @@ struct DebugServer::Impl {
 
     // ---- control thread ----
 
+    // Writes to motion ports since the last cycle that the server did not make came from the API.
+    void track_api_writes(const std::vector<std::shared_ptr<Module>>& mods, SteadyClock::time_point now) {
+        for (std::size_t m = 0; m < mods.size(); ++m)
+            for (std::size_t p = 0; p < seen_writes[m].size(); ++p) {
+                if (!ports[m][p].api_priority) continue;
+                const std::uint64_t n = mods[m]->write_count(p);
+                if (n == seen_writes[m][p]) continue;
+                seen_writes[m][p] = n;
+                api_writes[m][p] = now;
+            }
+    }
+
+    bool api_held(std::size_t m, std::size_t p, SteadyClock::time_point now) const {
+        return api_writes[m][p] != SteadyClock::time_point{} && now - api_writes[m][p] < api_hold;
+    }
+
+    // A held motion port blocks writes to every motion port of its module.
+    bool api_conflict(const Command& c, SteadyClock::time_point now, std::array<char, 256>& message) const {
+        if (c.op != Op::set_port || !ports[c.module][c.port].api_priority) return false;
+        for (std::size_t p = 0; p < api_writes[c.module].size(); ++p) {
+            if (!api_held(c.module, p, now)) continue;
+            std::snprintf(message.data(), message.size(), "module '%s' port '%s' is driven by the API",
+                          module_ids[c.module].c_str(), ports[c.module][p].name.c_str());
+            return true;
+        }
+        return false;
+    }
+
     void apply(Engine& engine) {
         if (stopping.load(std::memory_order_relaxed)) return;
         const auto& mods = engine.modules().modules();
+        const auto now = SteadyClock::now();
+        track_api_writes(mods, now);
         while (Command* c = commands.front()) {
             int expected = kPending;
             const bool take = c->state.compare_exchange_strong(expected, kTaken, std::memory_order_acq_rel);
             Status s;
-            if (take) {
+            std::array<char, 256> conflict{};
+            const bool owned = take && api_conflict(*c, now, conflict);
+            if (take && !owned) {
                 switch (c->op) {
                     case Op::set_port:
                         s = mods[c->module]->write_port(c->port, c->value);
+                        seen_writes[c->module][c->port] = mods[c->module]->write_count(c->port);
                         break;
                     case Op::set_enabled:
                         mods[c->module]->set_enabled(c->enabled);
@@ -648,21 +687,28 @@ struct DebugServer::Impl {
                     case Op::tune_limits:
                         s = engine.modules().tune_joint_limits(c->params);
                         break;
+                    case Op::home_all:
+                        s = engine.modules().home_all();
+                        break;
                 }
             }
             if (Reply* r = replies.claim()) {
                 r->module = c->module;
                 r->op = c->op;
-                r->values = !(take && s)               ? ConfigNode{}
+                r->values = !(take && !owned && s)     ? ConfigNode{}
                             : c->op == Op::tune        ? mods[c->module]->tunables()
                             : c->op == Op::tune_solver ? engine.modules().solver_params()
                             : c->op == Op::tune_limits ? engine.modules().joint_limits()
                                                        : ConfigNode{};
                 r->applied = take;
-                r->ok = s.ok();
+                r->ok = s.ok() && !owned;
                 r->code = s ? ErrorCode::internal : s.error().code;
+                r->protocol_code = owned ? "api_owned" : nullptr;
                 r->message[0] = '\0';
-                if (!s) std::snprintf(r->message.data(), r->message.size(), "%s", s.error().message.c_str());
+                if (owned)
+                    r->message = conflict;
+                else if (!s)
+                    std::snprintf(r->message.data(), r->message.size(), "%s", s.error().message.c_str());
                 replies.push();
             }
             commands.pop();
@@ -677,7 +723,8 @@ struct DebugServer::Impl {
         s.rate_hz = engine.options().rate_hz;
         s.fresh = engine.fresh();
         s.stats = engine.stats();
-        if (const auto now = SteadyClock::now(); now >= next_display) {
+        const auto now = SteadyClock::now();
+        if (now >= next_display) {
             next_display = now + publish_period;
             update_displays(engine);
         }
@@ -694,7 +741,10 @@ struct DebugServer::Impl {
             if (const std::string* h = m.held_by())
                 for (std::size_t k = 0; k < mods.size(); ++k)
                     if (&mods[k]->id() == h || mods[k]->id() == *h) ms.held_by = static_cast<int>(k);
-            for (std::size_t p = 0; p < ms.ports.size(); ++p) (void)m.read_port(p, ms.ports[p]);
+            for (std::size_t p = 0; p < ms.ports.size(); ++p) {
+                (void)m.read_port(p, ms.ports[p]);
+                ms.api_held[p] = api_held(i, p, now) ? 1 : 0;
+            }
         }
         const auto& res = engine.result().residuals;
         if (s.residuals.size() != res.size())
@@ -718,7 +768,7 @@ struct DebugServer::Impl {
     }
 
     /// `code` is empty on success, otherwise an ErrorCode name or a protocol code
-    /// (unauthorized, lease_held, busy, timeout).
+    /// (unauthorized, api_owned, busy, timeout).
     void reply(Client& c, const ConfigNode& id, const char* code, const std::string& message) {
         ConfigNode doc = ConfigNode::map();
         doc.set("type", "reply");
@@ -753,17 +803,6 @@ struct DebugServer::Impl {
         latest = std::move(text);
     }
 
-    void send_lease() {
-        for (Client& c : clients) {
-            if (c.dead || !c.authed) continue;
-            ConfigNode doc = ConfigNode::map();
-            doc.set("type", "lease");
-            doc.set("holder", lease != 0 ? ConfigNode(static_cast<double>(lease)) : ConfigNode{});
-            doc.set("mine", lease != 0 && lease == c.id);
-            frame(c.out, to_json(doc, 0));
-        }
-    }
-
     void on_authed(Client& c) {
         c.authed = true;
         frame(c.out, model);
@@ -771,11 +810,6 @@ struct DebugServer::Impl {
             if (!text.empty()) frame(c.out, text);
         if (!latest_solver_params.empty()) frame(c.out, latest_solver_params);
         if (!latest_joint_limits.empty()) frame(c.out, latest_joint_limits);
-        ConfigNode doc = ConfigNode::map();
-        doc.set("type", "lease");
-        doc.set("holder", lease != 0 ? ConfigNode(static_cast<double>(lease)) : ConfigNode{});
-        doc.set("mine", false);
-        frame(c.out, to_json(doc, 0));
     }
 
     Status parse_command(const ConfigNode& doc, const std::string& name, Command& cmd) {
@@ -812,6 +846,10 @@ struct DebugServer::Impl {
                 return make_error(ErrorCode::invalid_argument, "set_rate needs 'rate_hz' in [1, 10000]");
             cmd.op = Op::set_rate;
             cmd.rate_hz = rate->as_number();
+            return {};
+        }
+        if (name == "home_all") {
+            cmd.op = Op::home_all;
             return {};
         }
         if (name == "tune_solver" || name == "tune_limits") {
@@ -907,20 +945,6 @@ struct DebugServer::Impl {
         reply(c, id, nullptr, {});
     }
 
-    void handle_acquire(Client& c, const ConfigNode& doc, const ConfigNode& id) {
-        const ConfigNode* force = doc.find("force");
-        const bool forced =
-            force != nullptr && force->kind() == ConfigNode::Kind::boolean && force->as_bool();
-        if (lease != 0 && lease != c.id && !forced) {
-            reply(c, id, "lease_held", "control lease held by client " + std::to_string(lease));
-            return;
-        }
-        const bool changed = lease != c.id;
-        lease = c.id;
-        reply(c, id, nullptr, {});
-        if (changed) send_lease();
-    }
-
     void handle_asset(Client& c, const ConfigNode& doc, const ConfigNode& id) {
         const ConfigNode* name = doc.find("name");
         const ConfigNode* off = doc.find("offset");
@@ -983,21 +1007,9 @@ struct DebugServer::Impl {
         }
         if (name == "ping") return reply(c, id, nullptr, {});
         if (name == "subscribe") return handle_subscribe(c, *doc, id);
-        if (name == "acquire") return handle_acquire(c, *doc, id);
-        if (name == "release") {
-            if (lease == c.id) {
-                lease = 0;
-                send_lease();
-            }
-            return reply(c, id, nullptr, {});
-        }
         if (name == "asset") return handle_asset(c, *doc, id);
         if (!is_command(name)) {
             reply(c, id, to_string(ErrorCode::unsupported), "unknown op '" + name + "'");
-            return;
-        }
-        if (lease != 0 && lease != c.id) {
-            reply(c, id, "lease_held", "control lease held by client " + std::to_string(lease));
             return;
         }
         double timeout = options.command_timeout_s;
@@ -1048,7 +1060,11 @@ struct DebugServer::Impl {
             Pending& p = pending[replied % kRingSize];
             if (!p.answered && r->applied)
                 if (Client* c = find_client(p.client))
-                    reply(*c, p.id, r->ok ? nullptr : to_string(r->code), r->message.data());
+                    reply(*c, p.id,
+                          r->ok              ? nullptr
+                          : r->protocol_code ? r->protocol_code
+                                             : to_string(r->code),
+                          r->message.data());
             if (r->applied && r->values.kind() == ConfigNode::Kind::map) {
                 if (r->op == Op::tune_solver)
                     broadcast("solver_params", r->values, latest_solver_params);
@@ -1166,6 +1182,10 @@ struct DebugServer::Impl {
             for (std::size_t p = 0; p < ms.ports.size(); ++p)
                 values.set(ports[m][p].name, encode(ports[m][p], ms.ports[p]));
             node.set("ports", std::move(values));
+            ConfigNode held = ConfigNode::list();
+            for (std::size_t p = 0; p < ms.api_held.size(); ++p)
+                if (ms.api_held[p]) held.append(ports[m][p].name);
+            node.set("api_held", std::move(held));
             const ModuleDisplay& d = ms.display;
             if (d.valid) {
                 ConfigNode display_node = ConfigNode::map();
@@ -1276,20 +1296,14 @@ struct DebugServer::Impl {
                 flush(c);
                 if (c.closing && c.out.empty()) c.dead = true;
             }
-            bool lease_lost = false;
             for (auto it = clients.begin(); it != clients.end();) {
                 if (it->dead) {
-                    if (it->id == lease) {
-                        lease = 0;
-                        lease_lost = true;
-                    }
                     ::close(it->fd);
                     it = clients.erase(it);
                 } else {
                     ++it;
                 }
             }
-            if (lease_lost) send_lease();
         }
     }
 };
@@ -1321,6 +1335,8 @@ Result<std::shared_ptr<DebugServer>> DebugServer::start(Engine& engine, const De
     if (!std::isfinite(options.command_timeout_s) || options.command_timeout_s <= 0.0 ||
         options.command_timeout_s > kMaxTimeoutS)
         return make_error(ErrorCode::invalid_argument, "debug server: command_timeout_s must be in (0, 60]");
+    if (!std::isfinite(options.api_hold_s) || options.api_hold_s < 0.0 || options.api_hold_s > kMaxTimeoutS)
+        return make_error(ErrorCode::invalid_argument, "debug server: api_hold_s must be in [0, 60]");
     if (!options.token.empty() && (options.token.size() < kMinToken || options.token.size() > kMaxToken))
         return make_error(ErrorCode::invalid_argument, "debug server: token must be 16..1024 bytes");
     in_addr addr{};
@@ -1337,12 +1353,17 @@ Result<std::shared_ptr<DebugServer>> DebugServer::start(Engine& engine, const De
     d->options = options;
     d->publish_period = std::chrono::duration_cast<SteadyClock::duration>(
         std::chrono::duration<double>(1.0 / options.publish_hz));
+    d->api_hold =
+        std::chrono::duration_cast<SteadyClock::duration>(std::chrono::duration<double>(options.api_hold_s));
     for (const auto& m : engine.modules().modules()) {
         d->module_ids.push_back(m->id());
         for (const std::string& task : engine.modules().tasks(m->id()))
             d->task_owners.emplace(task,
                                    std::make_pair(d->module_ids.size() - 1, task.substr(m->id().size() + 1)));
         d->ports.push_back(m->ports());
+        auto& seen = d->seen_writes.emplace_back();
+        for (std::size_t p = 0; p < m->ports().size(); ++p) seen.push_back(m->write_count(p));
+        d->api_writes.emplace_back(m->ports().size());
         d->outputs.push_back(m->outputs());
         auto& frames = d->visual_frames.emplace_back();
         d->visual_counts.push_back(m->visuals().size());
@@ -1380,7 +1401,7 @@ Result<std::shared_ptr<DebugServer>> DebugServer::start(Engine& engine, const De
         }
     }
     std::vector<ConfigNode> caps;
-    for (const char* op : {"ping", "subscribe", "acquire", "release"}) caps.emplace_back(op);
+    for (const char* op : {"ping", "subscribe"}) caps.emplace_back(op);
     for (const char* op : kCommandOps) caps.emplace_back(op);
     if (d->assets) caps.emplace_back("asset");
     d->capabilities = ConfigNode::list(std::move(caps));

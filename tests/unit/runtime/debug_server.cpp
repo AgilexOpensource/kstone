@@ -162,8 +162,7 @@ TEST_CASE("debug server: hello, state, commands and replies over loopback") {
     {
         std::vector<std::string> caps;
         for (const ConfigNode& n : hello.find("capabilities")->items()) caps.push_back(n.as_string());
-        for (const char* op :
-             {"ping", "subscribe", "acquire", "release", "set_port", "tune", "pause", "step", "asset"})
+        for (const char* op : {"ping", "subscribe", "set_port", "tune", "pause", "step", "asset"})
             CHECK_MESSAGE(std::find(caps.begin(), caps.end(), op) != caps.end(), op);
     }
     ConfigNode model = client.read();
@@ -347,7 +346,6 @@ TEST_CASE("debug server: token auth") {
     c.send(R"({"op":"auth","id":1,"token":"0123456789abcdef-secret"})");
     CHECK(c.read().find("ok")->as_bool());
     CHECK(c.read().find("type")->as_string() == "model");
-    CHECK(c.read().find("type")->as_string() == "lease");
     c.send(R"({"op":"ping","id":2})");
     CHECK(reply_to(c, 2).find("ok")->as_bool());
     // A wrong token after auth is reported but keeps the session.
@@ -357,7 +355,7 @@ TEST_CASE("debug server: token auth") {
     CHECK(reply_to(c, 4).find("ok")->as_bool());
 }
 
-TEST_CASE("debug server: lease, subscribe and command timeout") {
+TEST_CASE("debug server: clients are equal, subscribe and command timeout") {
     auto e = load_engine(kFixtures / "arm_loopback.yaml");
     REQUIRE(e);
     DebugServerOptions options;
@@ -368,8 +366,8 @@ TEST_CASE("debug server: lease, subscribe and command timeout") {
 
     Client a((*server)->port());
     Client b((*server)->port());
-    a.read_type("lease");
-    b.read_type("lease");
+    a.read_type("model");
+    b.read_type("model");
 
     // Engine is not stepping: queued commands time out.
     a.send(R"({"op":"home","id":1,"module":"arm","timeout_s":0.05})");
@@ -382,16 +380,8 @@ TEST_CASE("debug server: lease, subscribe and command timeout") {
         CHECK(code_of(r) == "unsupported");
         CHECK(r.find("error")->as_string() == "unknown op 'bogus'");
     }
-
-    a.send(R"({"op":"acquire","id":3})");
-    CHECK(reply_to(a, 3).find("ok")->as_bool());
-    ConfigNode lease = b.read_type("lease");
-    CHECK_FALSE(lease.find("mine")->as_bool());
-    CHECK(lease.find("holder")->kind() == ConfigNode::Kind::number);
-    b.send(R"({"op":"set_enabled","id":4,"module":"fingers","enabled":false})");
-    CHECK(code_of(reply_to(b, 4)) == "lease_held");
-    b.send(R"({"op":"acquire","id":5})");
-    CHECK(code_of(reply_to(b, 5)) == "lease_held");
+    a.send(R"({"op":"control","id":3})");
+    CHECK(code_of(reply_to(a, 3)) == "unsupported");
     b.send(R"({"op":"subscribe","id":6,"rate_hz":1000})");
     CHECK(code_of(reply_to(b, 6)) == "invalid_argument");
     b.send(R"({"op":"subscribe","id":7,"rate_hz":0})");
@@ -399,29 +389,94 @@ TEST_CASE("debug server: lease, subscribe and command timeout") {
 
     std::atomic<bool> stop{false};
     std::thread runner([&] { CHECK(e->run(0.0, &stop)); });
-    a.send(R"({"op":"set_enabled","id":8,"module":"fingers","enabled":false})");
+    // Both clients may command; the last write wins.
+    a.send(R"({"op":"set_port","id":8,"module":"arm","port":"target","value":[0.3,0.0,1.0]})");
     CHECK(reply_to(a, 8).find("ok")->as_bool());
-    a.read_type("state");
-
-    // Holder releases: b may acquire; b is unsubscribed so it sees no state.
-    a.send(R"({"op":"release","id":9})");
-    CHECK(reply_to(a, 9).find("ok")->as_bool());
-    lease = b.read_type("lease");
-    CHECK(lease.find("holder")->kind() == ConfigNode::Kind::null);
-    b.send(R"({"op":"acquire","id":10})");
+    b.send(R"({"op":"set_port","id":9,"module":"arm","port":"target","value":[0.4,0.1,1.0]})");
+    CHECK(reply_to(b, 9).find("ok")->as_bool());
+    b.send(R"({"op":"set_enabled","id":10,"module":"fingers","enabled":false})");
+    CHECK(reply_to(b, 10).find("ok")->as_bool());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     for (;;) {
-        ConfigNode doc = b.read();
-        const std::string type = doc.find("type")->as_string();
-        REQUIRE(type != "state");
-        if (type == "reply") {
-            CHECK(doc.find("ok")->as_bool());
-            break;
+        const ConfigNode st = a.read_type("state");
+        const auto& target = module_node(st, "arm")->find("ports")->find("target")->items();
+        if (target[0].as_number() != doctest::Approx(0.4) ||
+            module_node(st, "fingers")->find("enabled")->as_bool()) {
+            REQUIRE(std::chrono::steady_clock::now() < deadline);
+            continue;
         }
+        CHECK(target[1].as_number() == doctest::Approx(0.1));
+        CHECK(module_node(st, "arm")->find("api_held")->items().empty());
+        break;
     }
-    CHECK(b.read_type("lease").find("mine")->as_bool());
-    a.send(R"({"op":"acquire","id":11,"force":true})");
-    CHECK(reply_to(a, 11).find("ok")->as_bool());
-    CHECK_FALSE(b.read_type("lease").find("mine")->as_bool());
+    stop = true;
+    runner.join();
+}
+
+TEST_CASE("debug server: API writes hold a port and rejected writes are not replayed") {
+    auto e = load_engine(kFixtures / "arm_loopback.yaml");
+    REQUIRE(e);
+    DebugServerOptions bad;
+    bad.port = 0;
+    bad.api_hold_s = 61.0;
+    CHECK_FALSE(DebugServer::start(*e, bad));
+    bad.api_hold_s = -1.0;
+    CHECK_FALSE(DebugServer::start(*e, bad));
+
+    DebugServerOptions options;
+    options.port = 0;
+    options.publish_hz = 200.0;
+    options.api_hold_s = 1.0;
+    auto server = DebugServer::start(*e, options);
+    REQUIRE(server);
+    Client a((*server)->port());
+    a.read_type("model");
+
+    const auto arm = e->modules().module("arm");
+    REQUIRE(arm);
+    PortValue v;
+    REQUIRE(arm->read_port(0, v));
+    v.vector = Eigen::Vector3d(0.2, 0.1, 0.0);
+    REQUIRE(arm->write_port(0, v));
+
+    std::atomic<bool> stop{false};
+    std::thread runner([&] { CHECK(e->run(0.0, &stop)); });
+    a.send(R"({"op":"set_port","id":1,"module":"arm","port":"target","value":[0.5,-0.3,1.0]})");
+    a.send(R"({"op":"home","id":2,"module":"arm"})");
+    a.send(R"({"op":"tune","id":3,"module":"arm","params":{"gain":0.25}})");
+    a.send(R"({"op":"set_enabled","id":4,"module":"fingers","enabled":false})");
+    {
+        const ConfigNode r = reply_to(a, 1);
+        CHECK(code_of(r) == "api_owned");
+        CHECK(r.find("error")->as_string() == "module 'arm' port 'target' is driven by the API");
+    }
+    // Only motion ports give the API priority.
+    CHECK(reply_to(a, 2).find("ok")->as_bool());
+    CHECK(reply_to(a, 3).find("ok")->as_bool());
+    CHECK(reply_to(a, 4).find("ok")->as_bool());
+    {
+        const ConfigNode state = a.read_type("state");
+        const auto& held = module_node(state, "arm")->find("api_held")->items();
+        REQUIRE(held.size() == 1);
+        CHECK(held[0].as_string() == "target");
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    for (;;) {
+        const ConfigNode st = a.read_type("state");
+        const ConfigNode* node = module_node(st, "arm");
+        if (!node->find("api_held")->items().empty()) {
+            REQUIRE(std::chrono::steady_clock::now() < deadline);
+            continue;
+        }
+        const auto& target = node->find("ports")->find("target")->items();
+        REQUIRE(target.size() == 3);
+        CHECK(target[0].as_number() != doctest::Approx(0.5));  // The rejected write is not replayed.
+        break;
+    }
+    a.send(R"({"op":"set_port","id":5,"module":"arm","port":"target","value":[0.5,-0.3,1.0]})");
+    CHECK(reply_to(a, 5).find("ok")->as_bool());
+    // The server's own write does not hold the port.
+    CHECK(module_node(a.read_type("state"), "arm")->find("api_held")->items().empty());
     stop = true;
     runner.join();
 }
@@ -437,7 +492,7 @@ TEST_CASE("debug server: capabilities without assets") {
     Client a((*server)->port());
     ConfigNode hello = a.read_type("hello");
     for (const ConfigNode& n : hello.find("capabilities")->items()) CHECK(n.as_string() != "asset");
-    a.read_type("lease");
+    a.read_type("model");
     a.send(R"({"op":"x-demo.echo","id":1})");
     CHECK(code_of(reply_to(a, 1)) == "unsupported");
     (*server)->stop();
@@ -562,16 +617,14 @@ TEST_CASE("debug server: tune_solver op and model solver") {
     a.send(R"({"op":"tune_solver","id":3})");
     CHECK(code_of(reply_to(a, 3)) == "invalid_argument");
 
-    // A held lease blocks other clients.
-    a.send(R"({"op":"acquire","id":4})");
-    CHECK(reply_to(a, 4).find("ok")->as_bool());
+    // Another client's tune replaces it.
     b.send(R"({"op":"tune_solver","id":5,"params":{"limit_gain":0.4}})");
-    CHECK_FALSE(reply_to(b, 5).find("ok")->as_bool());
+    CHECK(reply_to(b, 5).find("ok")->as_bool());
 
     Client late((*server)->port());
     late.read_type("model");
     CHECK(late.read_type("solver_params").find("values")->find("limit_gain")->as_number() ==
-          doctest::Approx(0.3));
+          doctest::Approx(0.4));
 
     stop = true;
     runner.join();
@@ -851,11 +904,56 @@ TEST_CASE("debug server: module visuals and display outputs") {
     const auto& poses = display->find("visual_poses")->items();
     REQUIRE(poses.size() == 2);
     double xs = 0.0;
-    for (const ConfigNode& p : poses) xs += p.find("translation")->items()[0].as_number();
+    for (const ConfigNode& p : poses) xs += p.find("position")->items()[0].as_number();
     CHECK(xs == doctest::Approx(0.765).epsilon(1e-3));
     // world_collision draws only its obstacles; a disabled one is hidden (null).
     const auto& world_poses = module_node(st, "world")->find("display")->find("visual_poses")->items();
     REQUIRE(world_poses.size() == 1);
     CHECK(world_poses[0].kind() == ConfigNode::Kind::null);
     fs::remove_all(dir);
+}
+
+TEST_CASE("debug server: home_all op homes the modules in control") {
+    auto e = load_engine(kFixtures / "arm_loopback.yaml");
+    REQUIRE(e);
+    DebugServerOptions options;
+    options.port = 0;
+    auto server = DebugServer::start(*e, options);
+    REQUIRE(server);
+    Client a((*server)->port());
+    a.read_type("model");
+
+    std::atomic<bool> stop{false};
+    std::thread runner([&] { CHECK(e->run(0.0, &stop)); });
+    a.read_type("state");
+    const auto home = [](const ConfigNode& st, const char* id) {
+        const ConfigNode* h = module_node(st, id)->find("home");
+        return h ? h->as_string() : std::string();
+    };
+    // Nobody has been given a target, so nothing is in control and nothing homes.
+    a.send(R"({"op":"home_all","id":1})");
+    CHECK(reply_to(a, 1).find("ok")->as_bool());
+    for (int n = 0; n < 3; ++n) {
+        const ConfigNode st = a.read_type("state");
+        for (const char* id : {"tool", "arm", "fingers"}) CHECK(home(st, id) == "idle");
+    }
+    a.send(R"({"op":"set_port","id":2,"module":"tool","port":"target","value":{"position":[0.3,0.0,0.5],"orientation":[1,0,0,0]}})");
+    CHECK(reply_to(a, 2).find("ok")->as_bool());
+    a.read_type("state");
+    a.send(R"({"op":"home_all","id":3})");
+    CHECK(reply_to(a, 3).find("ok")->as_bool());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    for (;;) {
+        const ConfigNode st = a.read_type("state");
+        if (home(st, "tool") == "idle") {
+            REQUIRE(std::chrono::steady_clock::now() < deadline);
+            continue;
+        }
+        CHECK(home(st, "arm") == "idle");
+        CHECK(home(st, "fingers") == "idle");
+        break;
+    }
+    stop = true;
+    runner.join();
+    (*server)->stop();
 }

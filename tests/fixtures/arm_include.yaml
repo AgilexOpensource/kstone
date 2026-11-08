@@ -2,7 +2,6 @@
 model:
   file: arm.urdf
 rate_hz: ${RATE:-100}
-realtime: false
 robot:
   type: loopback
 modules: !include include/modules.yaml

@@ -14,7 +14,7 @@ config = f"""
 model: {{file: {urdf.name}}}
 modules:
   tool:
-    type: frame_task
+    type: frame_target
     frame: tool
     gain: 0.5
     orientation_weight: [0, 0, 0]  # position only: the arm has too few joints for a full pose

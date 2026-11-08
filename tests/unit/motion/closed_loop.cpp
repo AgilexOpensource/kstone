@@ -132,8 +132,8 @@ struct PoseLoop {
 PoseTrajectoryConfig shaped(PoseSync sync) {
     PoseTrajectoryConfig c;
     c.sync = sync;
-    c.translation = {0.3, 1.0, 0.0, 0.0, 10.0};
-    c.rotation = {1.0, 3.0, 0.0, 0.0, 20.0};
+    c.position = {0.3, 1.0, 0.0, 0.0, 10.0};
+    c.orientation = {1.0, 3.0, 0.0, 0.0, 20.0};
     return c;
 }
 
@@ -281,9 +281,9 @@ TEST_CASE("closed loop: randomized stress") {
         }
         if (k % 401 == 0) {
             PoseTrajectoryConfig c = shaped(u(rng) < 0.5 ? PoseSync::axis_phase : PoseSync::axis_time);
-            c.translation.velocity = 0.05 + 0.5 * u(rng);
-            c.translation.jerk = u(rng) < 0.3 ? 0.0 : c.translation.jerk;
-            c.rotation.deceleration = 1.0 + 4.0 * u(rng);
+            c.position.velocity = 0.05 + 0.5 * u(rng);
+            c.position.jerk = u(rng) < 0.3 ? 0.0 : c.position.jerk;
+            c.orientation.deceleration = 1.0 + 4.0 * u(rng);
             c.lead_speed_scale = u(rng) < 0.5 ? 0.0 : 2.0;
             REQUIRE(loop.trajectory.tune(c));
         }

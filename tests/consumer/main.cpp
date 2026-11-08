@@ -73,8 +73,8 @@ int main(int argc, char** argv) {
         jq = joint->reference();
     }
     PoseTrajectoryConfig pose_cfg;
-    pose_cfg.translation.velocity = 0.2;
-    pose_cfg.translation.acceleration = 1.0;
+    pose_cfg.position.velocity = 0.2;
+    pose_cfg.position.acceleration = 1.0;
     auto pose = PoseTrajectory::create(pose_cfg);
     if (!pose) return 1;
     Eigen::Isometry3d goal = Eigen::Isometry3d::Identity();

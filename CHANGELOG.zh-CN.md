@@ -6,7 +6,7 @@
 
 首个版本。
 
-- 用 YAML 配置的逆运动学，模块包括 `frame_task`、`joint_target`、`gaze`、`chassis`、`center_of_mass`、`null_space_preference`、`self_collision` 和 `world_collision`。
+- 用 YAML 配置的逆运动学，模块包括 `frame_target`、`joint_target`、`gaze`、`chassis`、`center_of_mass`、`null_space`、`self_collision` 和 `world_collision`。
 - 求解模式 `weighted`、`lexicographic`、`layered_independent` 和 `layered_coupled`。
 - 以控制循环运行求解、通过机器人驱动插件收发数据的引擎。
 - 调试服务器，以及单独仓库 [kstone-viewer](https://github.com/AgilexOpensource/kstone_viewer)中用于测试的网页 viewer。

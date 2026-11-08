@@ -83,7 +83,7 @@ python3 -m pip install .   # or skip this if kstone is already installed
 
 ## A first look
 
-Solve IK without a robot. The config file names a URDF and the modules to use; here `arm` is a `joint_target` module and `tool` a `frame_task`:
+Solve IK without a robot. The config file names a URDF and the modules to use; here `arm` is a `joint_target` module and `tool` a `frame_target`:
 
 ```python
 import kstone
@@ -103,7 +103,7 @@ Run the same config as a control loop. The config's `robot:` section says which 
 ```python
 engine = kstone.load_engine("tests/fixtures/arm_loopback.yaml")
 engine.module("arm").write_port("target", [0.5, -0.3, 0.2])
-engine.run(duration_s=3.0)  # 3 s of engine time; this config has realtime: false, so it returns at once
+engine.run(duration_s=3.0)  # blocks for 3 s of wall-clock time
 print(engine.stats["cycles"], engine.quality)
 ```
 

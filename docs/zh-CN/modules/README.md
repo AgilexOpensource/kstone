@@ -6,9 +6,9 @@
 
 | 类型 | 作用 |
 |---|---|
-| [frame_task](frame_task.md) | 让某个 frame 跟踪位姿目标 |
+| [frame_target](frame_target.md) | 让某个 frame 跟踪位姿目标 |
 | [joint_target](joint_target.md) | 关节空间目标，直接关节控制 |
-| [null_space_preference](null_space_preference.md) | 在 frame_task 的零空间里保持姿态偏好 |
+| [null_space](null_space.md) | 在 frame_target 的零空间里保持姿态偏好 |
 | [gaze](gaze.md) | 让相机对准若干 frame |
 | [center_of_mass](center_of_mass.md) | 把质心约束在支撑多边形内 |
 | [self_collision](self_collision.md) | 自碰撞避免 |
@@ -24,7 +24,7 @@
 | 类型 | 值 |
 |---|---|
 | `vector` | 定长数组，带 `labels`、`lower`、`upper` |
-| `pose` | `{translation, rotation}`（rotation 为 wxyz 四元数）或 4×4 矩阵；`frame` / `reference` 说明目标的坐标系 |
+| `pose` | `{position, orientation}`（orientation 为 wxyz 四元数）或 4×4 矩阵；`frame` / `reference` 说明目标的坐标系 |
 | `flag` | bool |
 | `number` | 标量 |
 
@@ -41,8 +41,8 @@ schema 里标 `tunable: true` 的字段可在运行时修改：
 
 ```python
 waist = e.module("waist")
-waist.tune({"trajectory": {"translation": {"velocity": 0.5}}})
-print(waist.params()["trajectory"]["translation"]["velocity"])  # 0.5
+waist.tune({"trajectory": {"position": {"velocity": 0.5}}})
+print(waist.params()["trajectory"]["position"]["velocity"])  # 0.5
 ```
 
 ## 启用与控制权
@@ -55,7 +55,7 @@ print(waist.params()["trajectory"]["translation"]["velocity"])  # 0.5
 <a id="task-levels"></a>
 ## 任务层级
 
-带 `task` 字段的模块（frame_task、joint_target、null_space_preference、gaze）向求解器注册任务：
+带 `task` 字段的模块（frame_target、joint_target、null_space、gaze）向求解器注册任务：
 
 - `task.level`：分层求解的优先级，越小越优先。
 - `task.enabled`：是否参与求解。
@@ -65,7 +65,9 @@ center_of_mass、self_collision、world_collision 作为不等式约束加入求
 
 ## 回零
 
-`Module.homeable` 为真的模块（frame_task、joint_target）可调用 `home()`，`home_state` 为 `idle` / `waiting` / `executing` / `succeeded` / `timed_out` / `aborted`。`home_motion.velocity_scale` 控制速度，`home_motion.timeout_s` 是"没有进展"的超时，持续接近时不限时。
+`Module.homeable` 为真的模块（frame_target、joint_target）可调用 `home()`，`home_state` 为 `idle` / `waiting` / `executing` / `succeeded` / `timed_out` / `aborted`。`home_motion.velocity_scale` 控制速度，`home_motion.timeout_s` 是"没有进展"的超时，持续接近时不限时。
+
+`ModuleSet::home_all()`（Python `Engine.home_all()`，调试协议 `home_all`）按关节找出上一步控制它的模块并让其回 home：优先是获得授权的声明方，否则是最近一次在这些关节上收到目标的启用模块。也就是说，谁控制关节由用户最后给哪个模块下发目标决定。控制方不可回 home（如 gaze）时该关节保持不动；无人控制的关节跳过。被占用的模块不会被 `home_all` 回 home，但单独调用它的 `home` 仍然有效。
 
 ## 输出与可视化
 

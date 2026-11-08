@@ -24,11 +24,11 @@ static const char* kConfig =
     "modules:\n"
     "  arm: {type: joint_target, joints: [j1, j2, j3]}\n"
     "  tool:\n"
-    "    type: frame_task\n"
+    "    type: frame_target\n"
     "    frame: tool\n"
     "    trajectory:\n"
-    "      translation: {velocity: 0.3, acceleration: 1, jerk: 10}\n"
-    "      rotation: {velocity: 1, acceleration: 2, jerk: 20}\n";
+    "      position: {velocity: 0.3, acceleration: 1, jerk: 10}\n"
+    "      orientation: {velocity: 1, acceleration: 2, jerk: 20}\n";
 
 int main(void) {
     char err[256];

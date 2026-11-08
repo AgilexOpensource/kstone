@@ -55,14 +55,14 @@ KSTONE_EXPORT const char* to_string(ChassisReason value) noexcept;
 
 struct ChassisConfig {
     ChassisKinematics kinematics{ChassisKinematics::omni};
-    double target_translation_deadband{0.0};  ///< Differential: goal moves below this keep the current path.
-    double target_rotation_deadband{0.0};
+    double target_position_deadband{0.0};  ///< Differential: goal moves below this keep the current path.
+    double target_orientation_deadband{0.0};
     double odom_timeout_s{0.25};
     double command_timeout_s{0.25};
     double max_dt_s{0.1};
     int allowed_missed_cycles{2};
-    double max_linear{0.3};
-    double max_angular{0.5};
+    double max_linear_velocity{0.3};
+    double max_angular_velocity{0.5};
     double max_linear_acceleration{0.75};
     double max_linear_deceleration{0.75};
     double max_linear_reversal_deceleration{0.75};
@@ -71,8 +71,8 @@ struct ChassisConfig {
     double max_angular_reversal_deceleration{1.5};
     double max_linear_jerk{3.0};
     double max_angular_jerk{6.0};
-    double arrival_position_tolerance{0.01};
-    double arrival_rotation_tolerance{0.02};
+    double position_tolerance{0.01};
+    double orientation_tolerance{0.02};
     std::string base_frame{"base_link"};
 
     KSTONE_EXPORT Status validate() const;
@@ -80,16 +80,16 @@ struct ChassisConfig {
 
 /// Runtime-tunable pose-tracking limits; 0 disables a bound. Velocity mode uses the config maxima.
 struct ChassisPoseLimits {
-    double linear_velocity{0.0};
-    double linear_acceleration{0.0};
-    double linear_deceleration{0.0};
-    double linear_reversal_deceleration{0.0};
-    double linear_jerk{0.0};
-    double angular_velocity{0.0};
-    double angular_acceleration{0.0};
-    double angular_deceleration{0.0};
-    double angular_reversal_deceleration{0.0};
-    double angular_jerk{0.0};
+    double max_linear_velocity{0.0};
+    double max_linear_acceleration{0.0};
+    double max_linear_deceleration{0.0};
+    double max_linear_reversal_deceleration{0.0};
+    double max_linear_jerk{0.0};
+    double max_angular_velocity{0.0};
+    double max_angular_acceleration{0.0};
+    double max_angular_deceleration{0.0};
+    double max_angular_reversal_deceleration{0.0};
+    double max_angular_jerk{0.0};
     ChassisPlannerMode planner_mode{ChassisPlannerMode::axis_phase};
 
     KSTONE_EXPORT Status validate() const;

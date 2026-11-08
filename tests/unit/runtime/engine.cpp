@@ -108,7 +108,7 @@ TEST_CASE("engine: config fixture drives a joint target to convergence") {
     Eigen::VectorXd target(3);
     target << 0.5, -0.3, 1.0;
     REQUIRE(arm->set_target(target));
-    REQUIRE(e.run(20.0));
+    for (int i = 0; i < 2000; ++i) REQUIRE(e.step(e.stats().time + e.dt()));
     CHECK(e.stats().cycles == 2005);
     CHECK(e.stats().time == doctest::Approx(20.05));
     CHECK(arm->settled());
@@ -144,16 +144,15 @@ TEST_CASE("engine: all-continuous arm crosses +-pi on the short arc") {
     auto doc = parse_yaml(R"(
 model: {file: continuous_arm.urdf}
 rate_hz: 100
-realtime: false
 robot: {type: loopback}
 modules:
   tool:
-    type: frame_task
+    type: frame_target
     frame: tool
     trajectory:
-      translation: {velocity: 0.2, acceleration: 1, jerk: 10}
-      rotation: {velocity: 1, acceleration: 2, jerk: 20}
-  ns: {type: null_space_preference, primary: tool}
+      position: {velocity: 0.2, acceleration: 1, jerk: 10}
+      orientation: {velocity: 1, acceleration: 2, jerk: 20}
+  ns: {type: null_space, primary: tool}
   joints:
     type: joint_target
     joints: [c1, c2, c3, c4]
@@ -170,7 +169,7 @@ modules:
     for (const char* n : names) CHECK_FALSE(model->has_position_limit(*model->joint_id(n)));
 
     // No bounded joints: the joint_limits preference is absent and refused, the others work.
-    auto ns = std::dynamic_pointer_cast<NullSpacePreferenceModule>(e.modules().module("ns"));
+    auto ns = std::dynamic_pointer_cast<NullSpaceModule>(e.modules().module("ns"));
     REQUIRE(ns);
     CHECK_FALSE(ns->joint_limits_task());
     CHECK_FALSE(ns->set_preference(NullSpacePreference::joint_limits));
@@ -228,7 +227,7 @@ modules:
     for (int i = 0; i < 4; ++i) CHECK(travel[i] == doctest::Approx(6.0 - 2 * M_PI).epsilon(1e-3));
 
     // Cartesian target solved over the unbounded joints; the goal is a reachable pose across pi.
-    auto tool = std::dynamic_pointer_cast<FrameTaskModule>(e.modules().module("tool"));
+    auto tool = std::dynamic_pointer_cast<FrameTargetModule>(e.modules().module("tool"));
     REQUIRE(tool);
     Workspace ws(model);
     const FrameId frame = *model->frame_id("tool");
@@ -254,7 +253,6 @@ TEST_CASE("engine: revolute joint limited beyond +-pi moves multi-turn without w
     auto doc = parse_yaml(R"(
 model: {file: multiturn_joint.urdf}
 rate_hz: 100
-realtime: false
 robot: {type: loopback}
 modules:
   joint: {type: joint_target, joints: [m1]}
@@ -362,7 +360,7 @@ TEST_CASE("engine: thread.cpus pins run() and restores the affinity") {
     const std::vector<int> before = allowed_cpus();
     REQUIRE_FALSE(before.empty());
     auto doc = parse_yaml(
-        "model: {file: arm.urdf}\nrealtime: false\nthread: {cpus: [" + std::to_string(before.back()) + "]}\n",
+        "model: {file: arm.urdf}\nrealtime: true\nthread: {cpus: [" + std::to_string(before.back()) + "]}\n",
         "t.yaml");
     REQUIRE(doc);
     auto e = build_engine(*doc, kFixtures);
@@ -373,6 +371,41 @@ TEST_CASE("engine: thread.cpus pins run() and restores the affinity") {
     REQUIRE(e->run(0.03));
     CHECK(probe->during == std::vector<int>{before.back()});
     CHECK(allowed_cpus() == before);
+}
+
+TEST_CASE("engine: thread options are ignored when not realtime") {
+    struct Probe final : EngineObserver {
+        void before_step(Engine&) override { policy = current_policy(); }
+        int policy{-1};
+    };
+    std::vector<std::string> warnings;
+    Context context = Context::defaults();
+    context.log = Logger(make_callback_sink([&](const LogRecord& r) {
+                             if (r.level == LogLevel::warn) warnings.emplace_back(r.message);
+                         }),
+                         LogLevel::warn);
+    const int before = current_policy();
+    auto doc = parse_yaml("model: {file: arm.urdf}\nrealtime: false\nthread: {priority: 10}\n", "t.yaml");
+    REQUIRE(doc);
+    auto e = build_engine(*doc, kFixtures, {}, context);
+    REQUIRE_MESSAGE(e, message(e));
+    auto probe = std::make_shared<Probe>();
+    e->add_observer(probe);
+    REQUIRE(e->run(0.03));
+    CHECK(probe->policy == before);
+    CHECK(warnings.empty());
+}
+
+TEST_CASE("engine: elevate_thread_limits is a no-op without real-time needs and rejects bad options") {
+    CHECK(elevate_thread_limits(ThreadOptions{}, Logger{}));
+    ThreadOptions pinned;
+    pinned.cpus = {0};
+    CHECK(elevate_thread_limits(pinned, Logger{}));
+    ThreadOptions bad;
+    bad.priority = 1000;
+    const Status s = elevate_thread_limits(bad, Logger{});
+    REQUIRE_FALSE(s);
+    CHECK(s.error().code == ErrorCode::invalid_argument);
 }
 
 TEST_CASE("engine: thread.priority switches run() to SCHED_FIFO or warns and keeps running") {
@@ -387,7 +420,7 @@ TEST_CASE("engine: thread.priority switches run() to SCHED_FIFO or warns and kee
                          }),
                          LogLevel::warn);
     const int before = current_policy();
-    auto doc = parse_yaml("model: {file: arm.urdf}\nrealtime: false\nthread: {priority: 10}\n", "t.yaml");
+    auto doc = parse_yaml("model: {file: arm.urdf}\nrealtime: true\nthread: {priority: 10}\n", "t.yaml");
     REQUIRE(doc);
     auto rt = build_engine(*doc, kFixtures, {}, context);
     REQUIRE_MESSAGE(rt, message(rt));
@@ -425,7 +458,7 @@ TEST_CASE("engine: thread.lock_memory locks the process or warns and keeps runni
                              }),
                              LogLevel::warn);
         auto doc =
-            parse_yaml("model: {file: arm.urdf}\nrealtime: false\nthread: {lock_memory: true}\n", "t.yaml");
+            parse_yaml("model: {file: arm.urdf}\nrealtime: true\nthread: {lock_memory: true}\n", "t.yaml");
         if (!doc) _exit(10);
         auto rt = build_engine(*doc, kFixtures, {}, context);
         if (!rt || locked_kb() != 0) _exit(11);
@@ -487,11 +520,10 @@ TEST_CASE("engine: set_rate_hz switches dt at the next cycle and keeps time cont
     CHECK(e.stats().time == doctest::Approx(0.11));
 }
 
-TEST_CASE("engine: realtime pacing follows the clock") {
+TEST_CASE("engine: run() paces cycles to the clock") {
     auto doc = load_yaml(kFixtures / "arm_loopback.yaml");
     REQUIRE(doc);
     ConfigNode cfg = *doc;
-    cfg.set("realtime", true);
     cfg.set("rate_hz", 200.0);
     auto e = build_engine(cfg, kFixtures);
     REQUIRE_MESSAGE(e, message(e));
@@ -505,11 +537,10 @@ TEST_CASE("engine: realtime pacing follows the clock") {
     CHECK(e->stats().max_cycle_s > 0.0);
 }
 
-TEST_CASE("engine: a stop request interrupts a long realtime sleep") {
+TEST_CASE("engine: a stop request interrupts a long pacing sleep") {
     auto doc = load_yaml(kFixtures / "arm_loopback.yaml");
     REQUIRE(doc);
     ConfigNode cfg = *doc;
-    cfg.set("realtime", true);
     cfg.set("rate_hz", 0.01);
     auto e = build_engine(cfg, kFixtures);
     REQUIRE_MESSAGE(e, message(e));
@@ -567,7 +598,6 @@ TEST_CASE("engine: robot quaternions are normalized within 1e-3, rejected beyond
         auto set = ModuleSet::create(*model);
         REQUIRE(set);
         EngineOptions options;
-        options.realtime = false;
         auto e = Engine::create(std::move(*set), std::make_shared<LoopbackRobot>(q, (*model)->nv()), options);
         if (scale == 1.5) {
             REQUIRE_FALSE(e);
@@ -615,7 +645,6 @@ Result<Engine> scripted_engine(std::shared_ptr<ScriptedRobot>& robot, std::vecto
     robot = std::make_shared<ScriptedRobot>((*model)->neutral(), (*model)->nv(), std::move(failing));
     EngineOptions options;
     options.rate_hz = 100.0;
-    options.realtime = false;
     options.max_failed_cycles = max_failed;
     return Engine::create(std::move(*set), robot, options);
 }
@@ -664,7 +693,6 @@ TEST_CASE("engine: failed cycles do not advance module trajectories") {
     REQUIRE(set->add(arm));
     auto robot = std::make_shared<FlakyRobot>((*model)->neutral(), (*model)->nv());
     EngineOptions options;
-    options.realtime = false;
     auto e = Engine::create(std::move(*set), robot, options);
     REQUIRE_MESSAGE(e, message(e));
     REQUIRE(arm->set_target(Eigen::Vector3d::Constant(1.0)));
@@ -729,7 +757,6 @@ StampedFixture make_stamped(double feedback_timeout_s, std::vector<std::string> 
     Context context = Context::defaults();
     context.clock = clock;
     EngineOptions options;
-    options.realtime = false;
     options.feedback_timeout_s = feedback_timeout_s;
     options.feedback_joints = std::move(feedback_joints);
     auto e = Engine::create(std::move(*set), robot, options, context);
@@ -837,7 +864,6 @@ TEST_CASE("engine: feedback_joints selects the joints whose error is estimated")
         auto set = ModuleSet::create(*model);
         REQUIRE(set);
         EngineOptions options;
-        options.realtime = false;
         options.feedback_joints = {name};
         auto e = Engine::create(
             std::move(*set), std::make_shared<LoopbackRobot>((*model)->neutral(), (*model)->nv()), options);
@@ -939,7 +965,6 @@ TEST_CASE("engine: instances sharing a model run independently on separate threa
         REQUIRE(set);
         REQUIRE(ModuleRegistry::with_builtins().populate(*set, *modules, context));
         EngineOptions options;
-        options.realtime = false;
         auto e = Engine::create(std::move(*set),
                                 std::make_shared<LoopbackRobot>((*model)->neutral(), (*model)->nv()), options,
                                 context);
@@ -952,7 +977,7 @@ TEST_CASE("engine: instances sharing a model run independently on separate threa
         REQUIRE_MESSAGE(s, (s ? "" : s.error().message));
         return std::move(*e);
     };
-    constexpr double kDuration = 1.0;
+    constexpr double kDuration = 0.3;
 
     Engine seq_a = make(0.5);
     Engine seq_b = make(-0.4);
@@ -996,7 +1021,7 @@ TEST_CASE("engine: configuration errors carry location and path") {
     CHECK_MESSAGE(m.find("rate: unknown key") != std::string::npos, m);
     CHECK_MESSAGE(m.find("robot, modules)") != std::string::npos, m);
     m = build_error("model: {file: arm.urdf, bogus: 1}\n");
-    CHECK_MESSAGE(m.find("mimic, joint_limits)") != std::string::npos, m);
+    CHECK_MESSAGE(m.find("mimic, joint_limits, locked_joints)") != std::string::npos, m);
     m = build_error("model: {file: arm.urdf}\nrobot: {bogus: 1}\n");
     CHECK_MESSAGE(m.find("library, params)") != std::string::npos, m);
     for (const char* id : {"a.b", "a/b", "' a'", "1a"}) {
@@ -1013,9 +1038,9 @@ TEST_CASE("engine: configuration errors carry location and path") {
     CHECK_MESSAGE(m.find("write model: {file: arm.urdf}") != std::string::npos, m);
     {
         const std::string tool =
-            "model: {file: arm.urdf}\nmodules:\n  tool: {type: frame_task, frame: tool, trajectory: "
-            "{translation: {velocity: 0.3, acceleration: 1, jerk: 10}, rotation: {velocity: 1, "
-            "acceleration: 2, jerk: 20}}}\n  ns: {type: null_space_preference, primary: tool, ";
+            "model: {file: arm.urdf}\nmodules:\n  tool: {type: frame_target, frame: tool, trajectory: "
+            "{position: {velocity: 0.3, acceleration: 1, jerk: 10}, orientation: {velocity: 1, "
+            "acceleration: 2, jerk: 20}}}\n  ns: {type: null_space, primary: tool, ";
         m = build_error(tool + "reference: custom, posture: [0, 0, 0]}\n");
         CHECK_MESSAGE(m.find("needs 4 values (j1, j2, j3, j4), got 3") != std::string::npos, m);
         m = build_error(tool + "reference: custom, posture: [0, 0, 0, 0.5]}\n");
@@ -1072,11 +1097,11 @@ TEST_CASE("engine: robot.initial by joint name, mimic followers and root pose") 
     CHECK_MESSAGE(m.find("robot.initial.tool_joint") != std::string::npos, m);
     m = build_error("model: {file: arm.urdf}\nrobot: {initial: {j1: x}}\n");
     CHECK_MESSAGE(m.find("robot.initial.j1: expected a number") != std::string::npos, m);
-    m = build_error("model: {file: arm.urdf}\nrobot: {initial_root: {translation: [1, 0, 0]}}\n");
+    m = build_error("model: {file: arm.urdf}\nrobot: {initial_root: {position: [1, 0, 0]}}\n");
     CHECK_MESSAGE(m.find("robot.initial_root: model root is fixed") != std::string::npos, m);
     m = build_error(
         "model: {file: floating_base.urdf, root: free_flyer}\n"
-        "robot: {initial: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0], initial_root: {translation: [1, 0, 0]}}\n");
+        "robot: {initial: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0], initial_root: {position: [1, 0, 0]}}\n");
     CHECK_MESSAGE(m.find("robot.initial_root: not combinable") != std::string::npos, m);
     m = build_error(
         "model: {file: arm.urdf}\nmodules:\n  g: {type: joint_target, joints: [finger_left_joint, "
@@ -1089,7 +1114,7 @@ TEST_CASE("engine: robot.initial by joint name, mimic followers and root pose") 
 
     doc = parse_yaml(
         "model: {file: floating_base.urdf, root: free_flyer}\n"
-        "robot: {initial: {joint2: 0.2}, initial_root: {translation: [1, 2, 3], rpy: [0, 0, 0.5]}}\n",
+        "robot: {initial: {joint2: 0.2}, initial_root: {position: [1, 2, 3], rpy: [0, 0, 0.5]}}\n",
         "t.yaml");
     REQUIRE(doc);
     e = build_engine(*doc, kFixtures);
@@ -1159,6 +1184,45 @@ TEST_CASE("engine: model.joint_limits replaces the loaded model limits") {
     CHECK_MESSAGE(err.find("model.joint_limits.position.middle: unknown key") != std::string::npos, err);
     err = build_error("model: {file: arm.urdf, joint_limits: [1]}\n");
     CHECK_MESSAGE(err.find("model.joint_limits: expected a map") != std::string::npos, err);
+}
+
+TEST_CASE("engine: model.locked_joints holds joints at their initial value") {
+    auto doc = parse_yaml(
+        "model: {file: arm.urdf, locked_joints: [j2, finger_left_joint]}\n"
+        "robot: {initial: {j2: 0.2, finger_left_joint: 0.01}}\n"
+        "modules:\n  arm: {type: joint_target, joints: [j1, j2, j3]}\n",
+        "t.yaml");
+    REQUIRE(doc);
+    auto e = build_engine(*doc, kFixtures);
+    REQUIRE_MESSAGE(e, message(e));
+    auto arm = std::dynamic_pointer_cast<JointTargetModule>(e->modules().module("arm"));
+    REQUIRE(arm);
+    Eigen::VectorXd target(3);
+    target << 0.5, -0.3, 1.0;
+    REQUIRE(arm->set_target(target));
+    for (int i = 0; i < 300; ++i) REQUIRE(e->step(e->stats().time + e->dt()));
+    const Eigen::VectorXd& q = e->state().q;
+    CHECK(joint_q(*e, q, "j1") == doctest::Approx(0.5).epsilon(1e-3));
+    CHECK(joint_q(*e, q, "j2") == doctest::Approx(0.2));
+    CHECK(joint_q(*e, q, "finger_left_joint") == doctest::Approx(0.01));
+    CHECK(joint_q(*e, q, "finger_right_joint") == doctest::Approx(-0.01));
+
+    std::string err = build_error("model: {file: arm.urdf, locked_joints: [nope]}\n");
+    CHECK_MESSAGE(err.find("t.yaml:1:41: model.locked_joints[0]: unknown joint 'nope'") == 0, err);
+    err = build_error("model: {file: arm.urdf, locked_joints: [j1, j1]}\n");
+    CHECK_MESSAGE(err.find("model.locked_joints[1]: duplicate joint 'j1'") != std::string::npos, err);
+    err = build_error("model: {file: arm.urdf, locked_joints: [tool_joint]}\n");
+    CHECK_MESSAGE(err.find("model.locked_joints[0]: unknown joint 'tool_joint'") != std::string::npos, err);
+    err = build_error("model: {file: arm.urdf, mimic: coupled, locked_joints: [finger_right_joint]}\n");
+    CHECK_MESSAGE(err.find("'finger_right_joint' has no velocity") != std::string::npos, err);
+    err = build_error("model: {file: floating_base.urdf, root: free_flyer, locked_joints: [root_joint]}\n");
+    CHECK_MESSAGE(err.find("'root_joint' is the model root") != std::string::npos, err);
+    err = build_error("model: {file: arm.urdf, locked_joints: j1}\n");
+    CHECK_MESSAGE(err.find("model.locked_joints: expected a list") != std::string::npos, err);
+    err = build_error("model: {file: arm.urdf, locked_joints: [1]}\n");
+    CHECK_MESSAGE(err.find("model.locked_joints[0]: expected a string") != std::string::npos, err);
+    err = build_error("model: {file: arm.urdf, nope: 1}\n");
+    CHECK_MESSAGE(err.find("joint_limits, locked_joints)") != std::string::npos, err);
 }
 
 TEST_CASE("engine: model.package_dirs resolves package:// before the host handler") {

@@ -15,7 +15,7 @@ Runnable programs are in [examples/cpp](../examples/cpp).
 | [runtime/snapshot.hpp](../include/kstone/runtime/snapshot.hpp) | `EngineSnapshot`, `TelemetrySink`, `make_telemetry_observer`: read-only telemetry |
 | [runtime/robot.hpp](../include/kstone/runtime/robot.hpp) | `RobotInterface` for C++ drivers or simulators; `LoopbackRobot` |
 | [runtime/robot_plugin.hpp](../include/kstone/runtime/robot_plugin.hpp) | `load_robot_plugin`: load a C ABI driver library |
-| [runtime/debug_server.hpp](../include/kstone/runtime/debug_server.hpp) | Debug server: telemetry, tuning, control lease |
+| [runtime/debug_server.hpp](../include/kstone/runtime/debug_server.hpp) | Debug server: telemetry, tuning, control source, API priority |
 | [runtime/doctor.hpp](../include/kstone/runtime/doctor.hpp) | Environment check |
 | [module/module.hpp](../include/kstone/module/module.hpp) | `Module`: ports, enable/disable, tune; `ModuleSet`: offline solving without a robot. Built-in types are in [modules](modules/README.md) |
 | [module/config.hpp](../include/kstone/module/config.hpp), [module/yaml.hpp](../include/kstone/module/yaml.hpp) | `ConfigNode`; YAML loading, `!include`, `${var}` expansion |

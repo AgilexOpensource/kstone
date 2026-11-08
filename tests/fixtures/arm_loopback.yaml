@@ -2,19 +2,18 @@
 model:
   file: arm.urdf
 rate_hz: 100
-realtime: false
 solver:
   mode: weighted
 robot:
   type: loopback
 modules:
   tool:
-    type: frame_task
+    type: frame_target
     frame: tool
     gain: 0.5
     trajectory:
-      translation: {velocity: 0.3, acceleration: 1, jerk: 10}
-      rotation: {velocity: 1, acceleration: 2, jerk: 20}
+      position: {velocity: 0.3, acceleration: 1, jerk: 10}
+      orientation: {velocity: 1, acceleration: 2, jerk: 20}
   arm:
     type: joint_target
     joints: [j1, j2, j3]

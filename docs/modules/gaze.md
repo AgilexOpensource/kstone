@@ -38,5 +38,5 @@ e.module("gaze").tune({"target_idle_s": 0})  # always watch the end effectors
 
 ## Pitfalls
 
-- In the example `head` is a joint_target with `claim_idle: true`. After manual head control, gaze takes over only once an end effector moves again and `release_after_s` has passed.
+- In the example `head` is a joint_target with `on_idle: claim`. After manual head control, gaze takes over only once an end effector moves again and `release_after_s` has passed.
 - If `optical_axis` does not match the camera frame's real orientation, the aim is off. Check the frame orientation in the viewer first.

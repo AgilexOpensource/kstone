@@ -124,7 +124,6 @@ Fixture make(CommandGuardOptions guard, double solver_velocity = 0.0, double j1 
     auto robot = std::make_shared<RecordingRobot>(q0, (*model)->nv());
     EngineOptions options;
     options.rate_hz = 1.0 / kDt;
-    options.realtime = false;
     options.safety = guard;
     auto e = Engine::create(std::move(*set), robot, options, context);
     REQUIRE_MESSAGE(e, message(e));
@@ -277,7 +276,6 @@ TEST_CASE("guard: non-finite steps are rejected before the guard even in clamp m
     auto robot = std::make_shared<RecordingRobot>((*model)->neutral(), (*model)->nv());
     EngineOptions options;
     options.rate_hz = 1.0 / kDt;
-    options.realtime = false;
     options.safety = mode(GuardMode::clamp);
     auto e = Engine::create(std::move(*set), robot, options);
     REQUIRE_MESSAGE(e, message(e));
@@ -302,7 +300,6 @@ TEST_CASE("guard: a non-finite QP step is a solver error, also with the guard of
     auto robot = std::make_shared<RecordingRobot>((*model)->neutral(), (*model)->nv());
     EngineOptions options;
     options.rate_hz = 1.0 / kDt;
-    options.realtime = false;
     options.safety = mode(GuardMode::off);
     std::vector<std::string> logged;
     Context context = Context::defaults();
@@ -369,7 +366,7 @@ std::string build_error(const std::string& yaml) {
 
 TEST_CASE("guard: yaml safety section") {
     auto doc = parse_yaml(
-        "model: {file: arm.urdf}\nrealtime: false\n"
+        "model: {file: arm.urdf}\n"
         "safety: {mode: clamp, velocity_scale: 0.5, tolerance: 1e-5}\n",
         "t.yaml");
     REQUIRE_MESSAGE(doc, message(doc));

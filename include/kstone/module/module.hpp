@@ -78,6 +78,7 @@ struct PortInfo {
     std::string frame;                ///< pose: the frame it drives.
     std::string reference;            ///< pose: expressed in this frame; empty = world.
     double timeout{0.0};              ///< > 0: a write lapses after this many seconds unless rewritten.
+    bool api_priority{false};         ///< Motion input: application writes hold off debug clients.
     /// Elements of a vector port; 1 for number/flag.
     Eigen::Index size() const noexcept {
         return type == PortType::vector ? static_cast<Eigen::Index>(labels.size()) : 1;
@@ -231,7 +232,12 @@ class KSTONE_EXPORT Module {
     int port_index(const std::string& name) const noexcept;
     /// Control-thread only. Steady-state reads into a value of matching size do not allocate.
     virtual Status read_port(std::size_t index, PortValue& out) const;
-    virtual Status write_port(std::size_t index, const PortValue& value);
+    /// Counts accepted writes (write_count()) and forwards to on_write_port().
+    Status write_port(std::size_t index, const PortValue& value);
+    /// Accepted writes of ports()[index] so far, including typed setters; 0 if out of range.
+    std::uint64_t write_count(std::size_t index) const noexcept {
+        return index < write_counts_.size() ? write_counts_[index] : 0;
+    }
     /// unsupported unless the module can home.
     virtual Status request_home();
     /// True if request_home() is supported.
@@ -259,8 +265,17 @@ class KSTONE_EXPORT Module {
     virtual ConfigNode tune_schema() const { return {}; }
 
   protected:
+    /// `index` is in range of ports().
+    virtual Status on_write_port(std::size_t index, const PortValue& value);
+    /// Counts a write of ports()[index] made outside write_port(), e.g. by a typed setter.
+    void mark_written(std::size_t index) noexcept {
+        if (index < write_counts_.size()) ++write_counts_[index];
+    }
     /// From configure() only.
-    void declare_port(PortInfo port) { ports_.push_back(std::move(port)); }
+    void declare_port(PortInfo port) {
+        ports_.push_back(std::move(port));
+        write_counts_.push_back(0);
+    }
     void declare_visual(VisualInfo visual) { visuals_.push_back(std::move(visual)); }
     void declare_output(OutputInfo output) { outputs_.push_back(std::move(output)); }
     /// Switch one of this module's tasks while running; all start active. Applied before the solve.
@@ -286,6 +301,7 @@ class KSTONE_EXPORT Module {
     std::vector<char> task_active_, task_locked_;
     bool tasks_dirty_{false};
     std::vector<PortInfo> ports_;
+    std::vector<std::uint64_t> write_counts_;
     std::vector<VisualInfo> visuals_;
     std::vector<OutputInfo> outputs_;
     std::string id_;
@@ -338,6 +354,10 @@ class KSTONE_EXPORT ModuleSet {
     /// The next step() skips one Cycle::index (running homings abort) and calls reset() on every running
     /// module, as after being held. rebase: modules also drop their held targets (Cycle::rebase).
     void resynchronize(bool rebase = false) noexcept;
+    /// request_home() on every enabled, homeable module in control of some joints as of the last step: the
+    /// granted claim holder, else the latest to request_control() there. Joints nobody controls, or
+    /// controlled by a non-homeable module (e.g. gaze), are left alone. Returns the first error.
+    Status home_all();
     /// Coordinates (size nv) set to measured by the last step()'s prepare().
     const Mask& aligned() const noexcept;
 

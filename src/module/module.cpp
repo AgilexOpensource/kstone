@@ -99,7 +99,15 @@ Status Module::read_port(std::size_t, PortValue&) const {
     return make_error(ErrorCode::out_of_range, "module '" + id_ + "': no such port");
 }
 
-Status Module::write_port(std::size_t, const PortValue&) {
+Status Module::write_port(std::size_t index, const PortValue& value) {
+    if (index >= ports_.size())
+        return make_error(ErrorCode::out_of_range, "module '" + id_ + "': no such port");
+    Status s = on_write_port(index, value);
+    if (s) ++write_counts_[index];
+    return s;
+}
+
+Status Module::on_write_port(std::size_t, const PortValue&) {
     return make_error(ErrorCode::out_of_range, "module '" + id_ + "': no such port");
 }
 
@@ -192,6 +200,7 @@ struct Entry {
     Mask driven;
     Claim claim;
     std::uint64_t claim_since{0};
+    std::uint64_t input_at{0};  // cycle + 1 of the last request_control(); 0 if none
     std::size_t order{0};
     bool claimed{false};
     bool tasks_on{false};
@@ -502,6 +511,7 @@ Status ModuleSet::step(const Eigen::Ref<const Eigen::VectorXd>& q, const Eigen::
         if (!r.module->control_requested_) continue;
         r.module->control_requested_ = false;
         if (!r.module->enabled_) continue;
+        r.input_at = s.cycle + 1;
         for (Entry& e : s.entries)
             if (&e != &r && e.claim.joints && intersects(r.driven, *e.claim.joints) &&
                 e.module->yield_control())
@@ -555,6 +565,39 @@ std::shared_ptr<Module> ModuleSet::module(const std::string& id) const {
 }
 
 const std::vector<std::shared_ptr<Module>>& ModuleSet::modules() const noexcept { return impl_->modules; }
+
+Status ModuleSet::home_all() {
+    Impl& d = *impl_;
+    constexpr std::size_t none = ~std::size_t{0};
+    // Per joint: the granted claim holder, else the module that most recently received input there.
+    std::vector<std::size_t> owner(d.granted.size(), none);
+    for (std::size_t k : d.claimants) {
+        const Entry& e = d.entries[k];
+        if (e.module->held_by_ != nullptr) continue;
+        for (std::size_t i = 0; i < owner.size() && i < e.claim.joints->size(); ++i)
+            if (e.claim.joints->test(i)) owner[i] = k;
+    }
+    std::vector<std::uint64_t> latest(owner.size(), 0);
+    for (std::size_t k = 0; k < d.entries.size(); ++k) {
+        const Entry& e = d.entries[k];
+        if (e.input_at == 0 || !e.module->enabled() || e.module->held_by_ != nullptr) continue;
+        for (std::size_t i = 0; i < owner.size() && i < e.driven.size(); ++i)
+            if (e.driven.test(i) && !d.granted.test(i) && e.input_at > latest[i]) {
+                latest[i] = e.input_at;
+                owner[i] = k;
+            }
+    }
+    std::vector<bool> picked(d.entries.size(), false);
+    for (std::size_t k : owner)
+        if (k != none) picked[k] = true;
+    Status first;
+    for (std::size_t k = 0; k < d.entries.size(); ++k) {
+        Module& m = *d.entries[k].module;
+        if (!picked[k] || !m.enabled() || !m.homeable()) continue;
+        if (Status s = m.request_home(); !s && first) first = s;
+    }
+    return first;
+}
 
 const std::vector<std::string>& ModuleSet::tasks(const std::string& id) const {
     static const std::vector<std::string> none;

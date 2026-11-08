@@ -9,7 +9,7 @@ Every class and function has a docstring and type hints, so `help(kstone.Engine)
 ## Concepts
 
 - **Config**: a YAML file with the robot model (`model:`), the robot to drive (`robot:`), and a list of **modules** (`modules:`). See [Configuration](config.md).
-- **Module**: one goal or limit, such as "move this frame to a pose" (`frame_task`) or "move these joints to angles" (`joint_target`). You command a module by writing to its **ports**.
+- **Module**: one goal or limit, such as "move this frame to a pose" (`frame_target`) or "move these joints to angles" (`joint_target`). You command a module by writing to its **ports**.
 - **Solver**: computes the next joint configuration from the current one and the module targets. No robot, no timing.
 - **Engine**: a Solver plus a robot and a fixed-rate loop. Each cycle it reads the robot state, solves and sends the command.
 - **q** and **v**: joint positions (size `model.nq`) and joint velocities (size `model.nv`). They differ when the robot has continuous joints or a floating base, so look indices up by joint name with `model.q_index(name)` and `model.v_index(name)`.
@@ -39,7 +39,7 @@ for _ in range(300):
 | `residuals` | Remaining error of each task |
 | `held` | `True` if the step failed and the robot is held in place |
 
-A pose target is a 4×4 matrix or `{"translation": [x, y, z], "rotation": [w, x, y, z]}`:
+A pose target is a 4×4 matrix or `{"position": [x, y, z], "orientation": [w, x, y, z]}`:
 
 ```python
 ws = kstone.Workspace(solver.model)
@@ -63,7 +63,7 @@ print(engine.stats["cycles"], engine.stats["failed_cycles"])
 ```
 
 - `run()` blocks until `duration_s` passes or `stop()` is called from another thread. Without a duration it runs until stopped.
-- With `realtime: false` in the config, `run()` advances simulated time as fast as it can; with `realtime: true` it follows the wall clock.
+- `run()` follows the wall clock. To advance faster than real time (tests, offline simulation), call `step()` in a loop.
 - `engine.q` is the commanded configuration and `engine.measured` the last one read from the robot.
 - `engine.snapshot()` returns everything at once as a dict.
 
@@ -120,7 +120,7 @@ Modules can also be switched off with `module.enabled = False`.
 
 ```bash
 pip install "git+https://github.com/AgilexOpensource/kstone_viewer.git"
-kstone run tests/fixtures/arm_loopback.yaml --realtime --serve 7311
+kstone run tests/fixtures/arm_loopback.yaml --serve 7311
 # in a second terminal
 kstone-viewer --connect 127.0.0.1:7311
 ```

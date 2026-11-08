@@ -2,7 +2,7 @@
 
 [中文](../zh-CN/modules/self_collision.md) · [Module overview](README.md)
 
-Adds distance constraints between the robot's own geometries, keeping every pair at least `d_min` apart. Constraint only; it neither drives nor claims joints.
+Adds distance constraints between the robot's own geometries, keeping every pair at least `clearance` apart. Constraint only; it neither drives nor claims joints.
 
 ## Key parameters
 
@@ -15,14 +15,14 @@ Adds distance constraints between the robot's own geometries, keeping every pair
 
 ### constraint
 
-- `d_min`: minimum distance kept (m), default 0.03.
-- `gain`: allowed approach speed per metre above `d_min` (1/s), default 50. Each row is $\dot d \ge -\text{gain}\,(d - d_{min})$.
-- `activation_margin`: a pair gets a row once closer than `d_min + activation_margin`, default 0.05. `hysteresis`: an active pair stays active up to this much further, default 0.005.
-- `approach_deceleration`: braking deceleration (m/s²). The approach speed stays below $\sqrt{2a(d - d_{min})}$ and below half the remaining gap per step. Default 5, 0 = off.
+- `clearance`: minimum distance kept (m), default 0.03.
+- `gain`: allowed approach speed per metre above `clearance` (1/s), default 50. Each row is $\dot d \ge -\text{gain}\,(d - \text{clearance})$.
+- `activation_margin`: a pair gets a row once closer than `clearance + activation_margin`, default 0.05. `hysteresis`: an active pair stays active up to this much further, default 0.005.
+- `approach_deceleration`: braking deceleration (m/s²). The approach speed stays below $\sqrt{2a(d - \text{clearance})}$ and below half the remaining gap per step. Default 5, 0 = off.
 - `max_rows`: fixed row count, nearest pairs first, default 16. Pairs beyond it are dropped, farthest first.
 - `max_cuts`: extra rows for cutting planes, default 8, 0 = off. When a step ends with a pair below its floor, the step is re-solved with that pair relinearized at the step end. This covers the error of start-linearized rows on curved motion such as sliding or rotating.
 - `clip_slack`: how far below the floor the endpoint clip allows (m), default 0. A slack lets small steps skip the check and can deepen a penetration.
-- `exempt_penetrating`: true by default. A pair already penetrating when it enters the band gets no constraint until it is back beyond `d_min`; it may move out or deeper. With false it is pushed out like any other pair, which a deep start may not allow.
+- `exempt_penetrating`: true by default. A pair already penetrating when it enters the band gets no constraint until it is back beyond `clearance`; it may move out or deeper. With false it is pushed out like any other pair, which a deep start may not allow.
 
 ## Example
 
@@ -37,12 +37,12 @@ self_collision:
     - [head_base_link, head_yaw_link]
     - [left_gripper_base, right_gripper_base]  # let the grippers close in for bimanual work
   closed_loop: true
-  constraint: {d_min: 0.002, activation_margin: 0.01, hysteresis: 0.005, gain: 1.5, approach_deceleration: 20}
+  constraint: {clearance: 0.002, activation_margin: 0.01, hysteresis: 0.005, gain: 1.5, approach_deceleration: 20}
 ```
 
 ```python
 sc = e.module("self_collision")
-sc.tune({"constraint": {"d_min": 0.01}})
+sc.tune({"constraint": {"clearance": 0.01}})
 print(sc.outputs(e.q)["min_distance"])
 ```
 

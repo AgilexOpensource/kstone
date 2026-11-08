@@ -40,7 +40,7 @@ TEST_CASE("robot plugin: example driver runs the fixture to convergence") {
     Eigen::VectorXd target(3);
     target << 0.5, -0.3, 1.0;
     REQUIRE(arm->set_target(target));
-    REQUIRE(e->run(20.0));
+    for (int i = 0; i < 2000; ++i) REQUIRE(e->step(e->stats().time + e->dt()));
     const Model& m = *e->modules().model();
     CHECK(*m.joint_position(e->state().q, *m.joint_id("j1")) == doctest::Approx(0.5).epsilon(1e-3));
     CHECK(*m.joint_position(e->state().q, *m.joint_id("j2")) == doctest::Approx(-0.3).epsilon(1e-3));

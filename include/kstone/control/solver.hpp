@@ -56,7 +56,7 @@ struct SolverOptions {
     /// Size nq, or empty. Only scalar joints (nq == 1) use them; finite entries tighten the model.
     Eigen::VectorXd lower_position_limit, upper_position_limit;
     Mask locked;  ///< Size nv, or empty. Coordinates held at zero velocity.
-    double feasibility_tol{1e-6};
+    double feasibility_tolerance{1e-6};
     bool check_feasibility{true};
     /// Retry a failed stage with its recovery demands (inequality rows with lo > 0 or hi < 0) scaled by 0.5,
     /// then 0.25; if still infeasible, with each violated bound relaxed to zero: a violation may not grow but

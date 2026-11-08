@@ -38,5 +38,5 @@ e.module("gaze").tune({"target_idle_s": 0})  # 一直看着末端
 
 ## 常见坑
 
-- 示例里 `head` 是 `claim_idle: true` 的 joint_target。手动控制头部后，要等末端再次移动且过了 `release_after_s`，gaze 才接管。
+- 示例里 `head` 是 `on_idle: claim` 的 joint_target。手动控制头部后，要等末端再次移动且过了 `release_after_s`，gaze 才接管。
 - `optical_axis` 与相机 frame 实际朝向不符时会看偏，先用 viewer 确认 frame 方向。

@@ -35,7 +35,7 @@ C++ 宿主也可以直接实现 `RobotInterface`，见 [C++ API](api.md) 和 [en
 <a id="real-time-thread"></a>
 ## 实时线程
 
-Linux 上控制线程可用实时调度。设置在 `run()` 开始时生效，返回时恢复优先级和亲和。
+Linux 上控制线程可用实时调度。`realtime: true` 时设置在 `run()` 开始时生效，返回时恢复优先级和亲和；`realtime: false` 时忽略 `thread` 块。
 
 ```yaml
 thread:
@@ -45,7 +45,7 @@ thread:
 ```
 
 - 系统拒绝某项设置（如缺 CAP_SYS_NICE、RLIMIT_RTPRIO 或 CAP_IPC_LOCK）时记一条 warn 日志并照常运行，与 ros2_control_node 一致。配置值非法仍在创建时报错。
-- `lock_memory` 调用 `mlockall(MCL_CURRENT | MCL_FUTURE)`。
+- realtime 生效时（`--realtime` 或 `realtime: true`），`kstone run` 会调用 `elevate_thread_limits`：若 `ulimit -r` 低于 `priority`（或开了 `lock_memory` 而 `ulimit -l` 有限）且缺对应 capability，启动时执行一次 `sudo prlimit --pid <self>`，在终端提示输入密码。只提高这两个限额，进程本身不以 root 运行。无终端或 sudo 失败时记 warn 并照常运行。
 - 直接调用 `step()` 不受影响。
 
 <a id="run-contract"></a>
@@ -59,7 +59,7 @@ thread:
 <a id="debug-server"></a>
 ## 调试服务
 
-`kstone run --serve` 启动调试服务，默认 `127.0.0.1:7311`，提供遥测流、调参和控制租约。
+`kstone run --serve` 启动调试服务，默认 `127.0.0.1:7311`，提供遥测流、调参和远程命令。同一时刻只有一个客户端是控制源；代码写入的端口优先于远程写入。
 
 - 绑定非回环地址需要至少 16 字节的 token，来自 `--token-file` 或 `$KSTONE_TOKEN`。
 - 协议不加密，token 明文传输。跨不可信网络时套 SSH 隧道或 VPN。

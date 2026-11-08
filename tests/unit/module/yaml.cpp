@@ -46,11 +46,11 @@ std::string populate_error(const std::string& text, ErrorCode code) {
 }
 
 const char* kFrameTask = R"(
-  type: frame_task
+  type: frame_target
   frame: tool
   trajectory:
-    translation: {velocity: 0.3, acceleration: 1, jerk: 10}
-    rotation: {velocity: 1, acceleration: 1, jerk: 10}
+    position: {velocity: 0.3, acceleration: 1, jerk: 10}
+    orientation: {velocity: 1, acceleration: 1, jerk: 10}
 )";
 }  // namespace
 
@@ -239,11 +239,11 @@ TEST_CASE("yaml: includes") {
     CHECK(r->find("rate_hz")->as_number() == 100.0);
     const ConfigNode& tool = *r->find("modules")->find("tool");
     CHECK(tool.find("gain")->as_number() == 0.5);
-    const ConfigNode& translation = *tool.find("trajectory")->find("translation");
-    CHECK(translation.find("jerk")->as_number() == 10.0);
+    const ConfigNode& position = *tool.find("trajectory")->find("position");
+    CHECK(position.find("jerk")->as_number() == 10.0);
     // Locations inside included files name those files.
-    CHECK(translation.location().file == (kFixtures / "include" / "trajectory.yaml").string());
-    CHECK(translation.location().line == 1);
+    CHECK(position.location().file == (kFixtures / "include" / "trajectory.yaml").string());
+    CHECK(position.location().line == 1);
 
     YamlOptions set = files;
     set.vars = {{"RATE", "250"}};
@@ -256,11 +256,11 @@ TEST_CASE("yaml: includes") {
     text.base_dir = kFixtures / "include";
     auto t = parse_yaml("traj: !include trajectory.yaml\n", "t.yaml", text);
     REQUIRE_MESSAGE(t, (t ? "" : t.error().message));
-    CHECK(t->find("traj")->find("rotation")->find("jerk")->as_number() == 20.0);
+    CHECK(t->find("traj")->find("orientation")->find("jerk")->as_number() == 20.0);
     // The included root itself is located at the !include, not at 1:1 of the other file.
     CHECK(t->find("traj")->location().file == "t.yaml");
     CHECK(t->find("traj")->location().column == 7);
-    CHECK(t->find("traj")->find("rotation")->location().file ==
+    CHECK(t->find("traj")->find("orientation")->location().file ==
           (kFixtures / "include" / "trajectory.yaml").string());
 }
 
@@ -300,14 +300,14 @@ TEST_CASE("populate: builds modules in reference order") {
     REQUIRE(set);
     // ns is declared before the frame task it references.
     const ConfigNode doc = parse(std::string(R"(
-ns: {type: null_space_preference, primary: tool, preference: manipulability}
+ns: {type: null_space, primary: tool, preference: manipulability}
 arm: {type: joint_target, joints: [j1, j2, j3]}
 tool:)") + kFrameTask);
     Status s = ModuleRegistry::with_builtins().populate(*set, doc, Context::defaults());
     REQUIRE_MESSAGE(s, (s ? "" : s.error().message));
     CHECK(set->modules().size() == 3);
     CHECK(set->module("ns"));
-    CHECK(std::string(set->module("tool")->type()) == "frame_task");
+    CHECK(std::string(set->module("tool")->type()) == "frame_target");
     CHECK(set->configure());
     CHECK(ModuleRegistry::with_builtins().populate(*set, ConfigNode{}, Context::defaults()));
 }
@@ -324,15 +324,15 @@ TEST_CASE("populate: errors carry location and path") {
                        ErrorCode::invalid_argument);
     CHECK_MESSAGE(m.find("modules.arm.wieght: unknown key") != std::string::npos, m);
 
-    m = populate_error("ns: {type: null_space_preference, primary: tool}\n", ErrorCode::not_found);
+    m = populate_error("ns: {type: null_space, primary: tool}\n", ErrorCode::not_found);
     CHECK_MESSAGE(m.find("modules.ns.primary: no module 'tool'") != std::string::npos, m);
 
     m = populate_error("- 1\n", ErrorCode::invalid_argument);
     CHECK_MESSAGE(m.find("expected a map of module ids") != std::string::npos, m);
 
     m = populate_error(R"(
-a: {type: null_space_preference, primary: b}
-b: {type: null_space_preference, primary: a}
+a: {type: null_space, primary: b}
+b: {type: null_space, primary: a}
 )",
                        ErrorCode::invalid_argument);
     CHECK_MESSAGE(m.find("reference cycle among modules 'a', 'b'") != std::string::npos, m);

@@ -35,11 +35,11 @@ TEST_CASE("pose trajectory: axis modes") {
         CAPTURE(std::string(to_string(sync)));
         PoseTrajectoryConfig config;
         config.sync = sync;
-        config.translation.velocity = 0.2;
-        config.translation.acceleration = 0.5;
-        config.translation.jerk = 4.0;
-        config.rotation.velocity = 1.0;
-        config.rotation.acceleration = 2.0;
+        config.position.velocity = 0.2;
+        config.position.acceleration = 0.5;
+        config.position.jerk = 4.0;
+        config.orientation.velocity = 1.0;
+        config.orientation.acceleration = 2.0;
         PoseTrajectory planner = make(config);
         const Eigen::Isometry3d start = Eigen::Isometry3d::Identity();
         Eigen::Isometry3d goal = Eigen::Isometry3d::Identity();
@@ -52,7 +52,7 @@ TEST_CASE("pose trajectory: axis modes") {
         for (int cycle = 0; cycle < 400; ++cycle) {
             const Eigen::Vector3d position = advance(planner, start, goal, dt).translation();
             bounded = bounded &&
-                      !((position - previous).array().abs() > config.translation.velocity * dt + 1e-7).any();
+                      !((position - previous).array().abs() > config.position.velocity * dt + 1e-7).any();
             if (sync == PoseSync::axis_phase && position.norm() > 1e-6) {
                 const Eigen::Vector3d direction = goal.translation().normalized();
                 straight = straight && (position - position.dot(direction) * direction).norm() <= 1e-6;
@@ -94,7 +94,7 @@ TEST_CASE("pose trajectory: zero limits") {
         CHECK(advance(passthrough, start, goal, dt).isApprox(goal, 1e-12));
         CHECK(passthrough.stopped());
 
-        config.translation.velocity = 0.2;
+        config.position.velocity = 0.2;
         PoseTrajectory constant = make(config);
         for (int cycle = 1; cycle <= 10; ++cycle) {
             const Eigen::Isometry3d pose = advance(constant, start, goal, dt);
@@ -102,7 +102,7 @@ TEST_CASE("pose trajectory: zero limits") {
             CHECK(pose.linear().isApprox(goal.linear(), 1e-12));
         }
 
-        config.translation.acceleration = 0.5;
+        config.position.acceleration = 0.5;
         PoseTrajectory trapezoid = make(config);
         double previous = 0.0, previous_speed = 0.0, peak = 0.0;
         for (int cycle = 0; cycle < 400; ++cycle) {
@@ -122,8 +122,8 @@ TEST_CASE("pose trajectory: zero limits") {
 // The leash holds the ramp near a blocked frame and lets it turn back from there.
 TEST_CASE("pose trajectory: lead leash") {
     PoseTrajectoryConfig config;
-    config.translation.velocity = 0.5;
-    config.translation.acceleration = 2.0;
+    config.position.velocity = 0.5;
+    config.position.acceleration = 2.0;
     config.lead_speed_scale = 2.0;
     PoseTrajectory planner = make(config);
     const double dt = 0.02;
@@ -134,20 +134,20 @@ TEST_CASE("pose trajectory: lead leash") {
     bool steady = true;
     for (int cycle = 0; cycle < 100; ++cycle) {
         ramp = advance(planner, blocked, far, cycle % 2 ? 0.019 : 0.021);
-        steady = steady &&
-                 std::abs(ramp.translation().x() - config.lead_speed_scale * config.translation.velocity *
-                                                       PoseTrajectoryConfig::lead_period) <= 1e-9;
+        steady =
+            steady && std::abs(ramp.translation().x() - config.lead_speed_scale * config.position.velocity *
+                                                            PoseTrajectoryConfig::lead_period) <= 1e-9;
     }
     CHECK(steady);
     ramp = advance(planner, blocked, blocked, dt);
     CHECK(ramp.translation().x() <= 1.0 * dt + 1e-12);
     for (int cycle = 0; cycle < 20; ++cycle) ramp = advance(planner, blocked, blocked, dt);
     CHECK(std::abs(ramp.translation().x()) <= 1e-6);
-    config.translation.velocity = 0.25;
+    config.position.velocity = 0.25;
     REQUIRE(planner.tune(config));
     for (int cycle = 0; cycle < 100; ++cycle) ramp = advance(planner, blocked, far, dt);
     CHECK(std::abs(ramp.translation().x() - 0.01) <= 1e-9);
-    config.translation.velocity = 0.0;
+    config.position.velocity = 0.0;
     REQUIRE(planner.tune(config));
     CHECK(advance(planner, blocked, far, dt).isApprox(far, 1e-12));
     PoseTrajectoryConfig bad = config;
@@ -158,11 +158,11 @@ TEST_CASE("pose trajectory: lead leash") {
 
 TEST_CASE("pose trajectory: lead bound independent of loop rate") {
     PoseTrajectoryConfig config;
-    config.translation.velocity = 0.5;
-    config.translation.acceleration = 2.0;
+    config.position.velocity = 0.5;
+    config.position.acceleration = 2.0;
     config.lead_speed_scale = 2.0;
     const double expected =
-        config.lead_speed_scale * config.translation.velocity * PoseTrajectoryConfig::lead_period;
+        config.lead_speed_scale * config.position.velocity * PoseTrajectoryConfig::lead_period;
     const Eigen::Isometry3d blocked = Eigen::Isometry3d::Identity(), far = at_x(1.0);
     PoseTrajectory planner = make(config);
     for (const double dt : {0.02, 0.005, 0.001}) {
@@ -177,8 +177,8 @@ TEST_CASE("pose trajectory: lead bound independent of loop rate") {
 // A frame pushed ahead of the ramp and past the target leaves the ramp on its own profile.
 TEST_CASE("pose trajectory: leash ignores a frame ahead") {
     PoseTrajectoryConfig config;
-    config.translation.velocity = 0.25;
-    config.translation.acceleration = 0.15;
+    config.position.velocity = 0.25;
+    config.position.acceleration = 0.15;
     config.lead_speed_scale = 3.0;
     PoseTrajectory planner = make(config);
     const double dt = 0.02;
@@ -189,7 +189,7 @@ TEST_CASE("pose trajectory: leash ignores a frame ahead") {
         const Eigen::Isometry3d frame = at_x(std::min(0.8 * cycle * dt, 0.6));
         const double ramp = advance(planner, frame, target, dt).translation().x();
         below = below && ramp <= 0.5 + 1e-9;
-        bounded = bounded && std::abs(ramp - previous) <= config.translation.velocity * dt * 1.001;
+        bounded = bounded && std::abs(ramp - previous) <= config.position.velocity * dt * 1.001;
         previous = ramp;
     }
     CHECK(below);
@@ -200,9 +200,9 @@ TEST_CASE("pose trajectory: leash ignores a frame ahead") {
 // A move a hair past a Ruckig profile-shape boundary (2 a^3 / j^2 = 0.03 m) must still arrive.
 TEST_CASE("pose trajectory: profile boundary") {
     PoseTrajectoryConfig config;
-    config.translation.velocity = 0.5;
-    config.translation.acceleration = 1.5;
-    config.translation.jerk = 15.0;
+    config.position.velocity = 0.5;
+    config.position.acceleration = 1.5;
+    config.position.jerk = 15.0;
     PoseTrajectory planner = make(config);
     Eigen::Isometry3d start = Eigen::Isometry3d::Identity();
     start.translation().z() = 0.7555084442166413;
@@ -213,7 +213,7 @@ TEST_CASE("pose trajectory: profile boundary") {
     bool bounded = true;
     for (int cycle = 0; cycle < 50; ++cycle) {
         const double z = advance(planner, start, target, dt).translation().z();
-        bounded = bounded && z - previous <= config.translation.velocity * dt + 1e-9;
+        bounded = bounded && z - previous <= config.position.velocity * dt + 1e-9;
         previous = z;
     }
     CHECK(bounded);
@@ -223,7 +223,7 @@ TEST_CASE("pose trajectory: profile boundary") {
 
 TEST_CASE("pose trajectory: rejects bad input") {
     PoseTrajectoryConfig config;
-    config.translation.velocity = 0.2;
+    config.position.velocity = 0.2;
     PoseTrajectory planner = make(config);
     Eigen::Isometry3d skewed = Eigen::Isometry3d::Identity();
     skewed.linear()(0, 1) = 0.5;
@@ -231,6 +231,6 @@ TEST_CASE("pose trajectory: rejects bad input") {
     CHECK_FALSE(planner.initialized());
     CHECK_FALSE(planner.step(Eigen::Isometry3d::Identity(), Eigen::Isometry3d::Identity(), -0.01));
     CHECK_FALSE(planner.reset(skewed));
-    config.rotation.jerk = -1.0;
+    config.orientation.jerk = -1.0;
     CHECK_FALSE(PoseTrajectory::create(config));
 }

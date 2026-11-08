@@ -341,7 +341,7 @@ class Module:
 
     @property
     def type(self) -> str:
-        """Module type, e.g. 'frame_task'."""
+        """Module type, e.g. 'frame_target'."""
 
     @property
     def enabled(self) -> bool:
@@ -376,8 +376,8 @@ class Module:
             name: Port name; see ports.
 
         Returns:
-            A float, bool or array, or for a pose {'translation': [x, y, z],
-            'rotation': [w, x, y, z]}.
+            A float, bool or array, or for a pose {'position': [x, y, z],
+            'orientation': [w, x, y, z]}.
         """
 
     def write_port(self, name: str, value: Any) -> None:
@@ -386,7 +386,7 @@ class Module:
         Args:
             name: Port name; see ports.
             value: A float, bool or sequence of the port's size. A pose takes a 4x4
-                matrix or {'translation': [x, y, z], 'rotation': [w, x, y, z]}.
+                matrix or {'position': [x, y, z], 'orientation': [w, x, y, z]}.
 
         Example:
             engine.module("arm").write_port("target", [0.5, 0.0, 0.0])
@@ -558,6 +558,9 @@ class Engine:
     def solver_tune_schema(self) -> dict[str, Any]:
         """JSON Schema of the tune_solver() parameters."""
 
+    def home_all(self) -> None:
+        """Home every homeable module currently in control (not held by another module); watch home_state."""
+
     def tune_solver(self, params: dict[str, Any]) -> None:
         """Change some solver options; on error nothing changes.
 
@@ -686,6 +689,7 @@ class Engine:
         token: str = "",
         command_timeout_s: float = 1.0,
         assets: bool = True,
+        api_hold_s: float = 1.0,
     ) -> DebugServer:
         """Start the debug server used by the viewer and remote tools.
 
@@ -699,6 +703,8 @@ class Engine:
             command_timeout_s: How long a remote command stays in effect when the
                 client sets no timeout.
             assets: Let clients download the URDF and the files it references.
+            api_hold_s: How long after code writes a motion port (frame or joint
+                target, chassis motion) the server rejects remote writes to it (0 to 60 s).
 
         Returns:
             The server; it runs until server.stop().

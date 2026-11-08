@@ -218,8 +218,8 @@ Eigen::Isometry3d chassis_root_pose(const Pose2D& center, const Eigen::Isometry3
 
 Status ChassisConfig::validate() const {
     const std::pair<double, const char*> nonnegative[] = {
-        {target_translation_deadband, "target_translation_deadband"},
-        {target_rotation_deadband, "target_rotation_deadband"},
+        {target_position_deadband, "target_position_deadband"},
+        {target_orientation_deadband, "target_orientation_deadband"},
     };
     for (const auto& [value, name] : nonnegative)
         if (auto status = require_nonnegative(value, name); !status) return status;
@@ -227,8 +227,8 @@ Status ChassisConfig::validate() const {
         {odom_timeout_s, "odom_timeout_s"},
         {command_timeout_s, "command_timeout_s"},
         {max_dt_s, "max_dt_s"},
-        {max_linear, "max_linear"},
-        {max_angular, "max_angular"},
+        {max_linear_velocity, "max_linear_velocity"},
+        {max_angular_velocity, "max_angular_velocity"},
         {max_linear_acceleration, "max_linear_acceleration"},
         {max_linear_deceleration, "max_linear_deceleration"},
         {max_linear_reversal_deceleration, "max_linear_reversal_deceleration"},
@@ -237,8 +237,8 @@ Status ChassisConfig::validate() const {
         {max_angular_reversal_deceleration, "max_angular_reversal_deceleration"},
         {max_linear_jerk, "max_linear_jerk"},
         {max_angular_jerk, "max_angular_jerk"},
-        {arrival_position_tolerance, "arrival_position_tolerance"},
-        {arrival_rotation_tolerance, "arrival_rotation_tolerance"},
+        {position_tolerance, "position_tolerance"},
+        {orientation_tolerance, "orientation_tolerance"},
     };
     for (const auto& [value, name] : positive)
         if (auto status = require_positive(value, name); !status) return status;
@@ -250,9 +250,10 @@ Status ChassisConfig::validate() const {
 }
 
 Status ChassisPoseLimits::validate() const {
-    for (double value : {linear_velocity, linear_acceleration, linear_deceleration,
-                         linear_reversal_deceleration, linear_jerk, angular_velocity, angular_acceleration,
-                         angular_deceleration, angular_reversal_deceleration, angular_jerk})
+    for (double value :
+         {max_linear_velocity, max_linear_acceleration, max_linear_deceleration,
+          max_linear_reversal_deceleration, max_linear_jerk, max_angular_velocity, max_angular_acceleration,
+          max_angular_deceleration, max_angular_reversal_deceleration, max_angular_jerk})
         if (auto status = require_nonnegative(value, "pose limit"); !status) return status;
     switch (planner_mode) {
         case ChassisPlannerMode::axis_phase:
@@ -264,9 +265,10 @@ Status ChassisPoseLimits::validate() const {
 }
 
 bool ChassisPoseLimits::bypass() const noexcept {
-    for (double value : {linear_velocity, linear_acceleration, linear_deceleration,
-                         linear_reversal_deceleration, linear_jerk, angular_velocity, angular_acceleration,
-                         angular_deceleration, angular_reversal_deceleration, angular_jerk})
+    for (double value :
+         {max_linear_velocity, max_linear_acceleration, max_linear_deceleration,
+          max_linear_reversal_deceleration, max_linear_jerk, max_angular_velocity, max_angular_acceleration,
+          max_angular_deceleration, max_angular_reversal_deceleration, max_angular_jerk})
         if (value != 0.0) return false;
     return true;
 }
@@ -397,11 +399,11 @@ struct ChassisController::Impl {
         const double step_dt = std::max(dt, 1e-15);
         double wx = 0.0;
         double wy = 0.0;
-        if (distance > config.arrival_position_tolerance) {
+        if (distance > config.position_tolerance) {
             double speed = distance / step_dt;
-            if (limits.linear_velocity > 0) speed = std::min(speed, limits.linear_velocity);
-            if (limits.linear_acceleration > 0)
-                speed = std::min(speed, std::sqrt(2 * limits.linear_acceleration * distance));
+            if (limits.max_linear_velocity > 0) speed = std::min(speed, limits.max_linear_velocity);
+            if (limits.max_linear_acceleration > 0)
+                speed = std::min(speed, std::sqrt(2 * limits.max_linear_acceleration * distance));
             wx = speed * dx / distance;
             wy = speed * dy / distance;
         }
@@ -410,11 +412,11 @@ struct ChassisController::Impl {
         Twist2D result{c * wx + s * wy, -s * wx + c * wy, 0.0};
         if (config.kinematics == ChassisKinematics::differential) result.vy = 0.0;
         const double error_yaw = wrap_angle(goal.yaw - pose.yaw);
-        if (std::abs(error_yaw) > config.arrival_rotation_tolerance) {
+        if (std::abs(error_yaw) > config.orientation_tolerance) {
             double rate = std::abs(error_yaw) / step_dt;
-            if (limits.angular_velocity > 0) rate = std::min(rate, limits.angular_velocity);
-            if (limits.angular_acceleration > 0)
-                rate = std::min(rate, std::sqrt(2 * limits.angular_acceleration * std::abs(error_yaw)));
+            if (limits.max_angular_velocity > 0) rate = std::min(rate, limits.max_angular_velocity);
+            if (limits.max_angular_acceleration > 0)
+                rate = std::min(rate, std::sqrt(2 * limits.max_angular_acceleration * std::abs(error_yaw)));
             result.wz = std::copysign(rate, error_yaw);
         }
         return result;
@@ -442,22 +444,23 @@ struct ChassisController::Impl {
                 velocity[i] = acceleration[i] = 0.0;
         const double dx = goal.x - pose.x;
         const double dy = goal.y - pose.y;
-        const double lv = or_infinity(limits.linear_velocity);
-        const double av = or_infinity(limits.angular_velocity);
-        const double la = or_infinity(limits.linear_acceleration);
-        const double ld = limits.linear_deceleration > 0 ? limits.linear_deceleration : la;
-        const double lr = limits.linear_reversal_deceleration > 0 ? limits.linear_reversal_deceleration : ld;
-        const double aa = or_infinity(limits.angular_acceleration);
-        const double ad = limits.angular_deceleration > 0 ? limits.angular_deceleration : aa;
+        const double lv = or_infinity(limits.max_linear_velocity);
+        const double av = or_infinity(limits.max_angular_velocity);
+        const double la = or_infinity(limits.max_linear_acceleration);
+        const double ld = limits.max_linear_deceleration > 0 ? limits.max_linear_deceleration : la;
+        const double lr =
+            limits.max_linear_reversal_deceleration > 0 ? limits.max_linear_reversal_deceleration : ld;
+        const double aa = or_infinity(limits.max_angular_acceleration);
+        const double ad = limits.max_angular_deceleration > 0 ? limits.max_angular_deceleration : aa;
         const double ar =
-            limits.angular_reversal_deceleration > 0 ? limits.angular_reversal_deceleration : ad;
+            limits.max_angular_reversal_deceleration > 0 ? limits.max_angular_reversal_deceleration : ad;
         const std::array<double, 3> max_velocity{lv / kRootTwo, lv / kRootTwo, av};
         const std::array<double, 3> max_acceleration{
             acceleration_cap(velocity[0], dx, la / kRootTwo, ld / kRootTwo, lr / kRootTwo),
             acceleration_cap(velocity[1], dy, la / kRootTwo, ld / kRootTwo, lr / kRootTwo),
             acceleration_cap(velocity[2], yaw_goal - pose.yaw, aa, ad, ar)};
-        const double lj = or_infinity(limits.linear_jerk) / kRootTwo;
-        const double aj = or_infinity(limits.angular_jerk);
+        const double lj = or_infinity(limits.max_linear_jerk) / kRootTwo;
+        const double aj = or_infinity(limits.max_angular_jerk);
         for (std::size_t i = 0; i < 3; ++i) {
             snap(velocity[i], max_velocity[i]);
             snap(acceleration[i], max_acceleration[i]);
@@ -536,13 +539,13 @@ struct ChassisController::Impl {
 
     bool differential_pose_step(double dt, Twist2D& body) {
         const Pose2D request = *pose_target;
-        const double capture_position = 1.5 * config.arrival_position_tolerance;
-        const double capture_rotation = 1.5 * config.arrival_rotation_tolerance;
+        const double capture_position = 1.5 * config.position_tolerance;
+        const double capture_rotation = 1.5 * config.orientation_tolerance;
         const double position_change =
             path_goal ? std::hypot(request.x - path_goal->x, request.y - path_goal->y) : kInfinity;
         const double yaw_change = path_goal ? std::abs(wrap_angle(request.yaw - path_goal->yaw)) : kInfinity;
-        if (position_change > config.target_translation_deadband ||
-            yaw_change > config.target_rotation_deadband) {
+        if (position_change > config.target_position_deadband ||
+            yaw_change > config.target_orientation_deadband) {
             const double dx = request.x - pose.x;
             const double dy = request.y - pose.y;
             const double distance = std::hypot(dx, dy);
@@ -607,17 +610,17 @@ struct ChassisController::Impl {
         }
         Regulated linear;
         if (!position_regulator(linear_position, out.vx, out_acceleration.vx, linear_target,
-                                limits.linear_velocity, limits.linear_acceleration,
-                                limits.linear_deceleration, limits.linear_reversal_deceleration,
-                                limits.linear_jerk, dt, linear))
+                                limits.max_linear_velocity, limits.max_linear_acceleration,
+                                limits.max_linear_deceleration, limits.max_linear_reversal_deceleration,
+                                limits.max_linear_jerk, dt, linear))
             return false;
         if (linear.velocity * straight_direction < 0)
             linear = Regulated{};  // never reverse on a fixed segment
         Regulated angular;
         if (!position_regulator(0.0, out.wz, out_acceleration.wz, angular_displacement,
-                                limits.angular_velocity, limits.angular_acceleration,
-                                limits.angular_deceleration, limits.angular_reversal_deceleration,
-                                limits.angular_jerk, dt, angular))
+                                limits.max_angular_velocity, limits.max_angular_acceleration,
+                                limits.max_angular_deceleration, limits.max_angular_reversal_deceleration,
+                                limits.max_angular_jerk, dt, angular))
             return false;
         if (phase == DiffPhase::final_align && distance <= capture_position &&
             std::abs(yaw_error) <= capture_rotation && std::abs(angular.velocity) < 1e-6) {
@@ -679,10 +682,10 @@ struct ChassisController::Impl {
         const auto& c = config;
         double vx = nominal.vx;
         double vy = c.kinematics == ChassisKinematics::omni ? nominal.vy : 0.0;
-        double scale = std::min(1.0, c.max_linear / std::max(std::hypot(vx, vy), 1e-15));
+        double scale = std::min(1.0, c.max_linear_velocity / std::max(std::hypot(vx, vy), 1e-15));
         vx *= scale;
         vy *= scale;
-        const double wz = std::clamp(nominal.wz, -c.max_angular, c.max_angular);
+        const double wz = std::clamp(nominal.wz, -c.max_angular_velocity, c.max_angular_velocity);
         const double dx = vx - out.vx;
         const double dy = vy - out.vy;
         scale = std::min(1.0, c.max_linear_acceleration * dt / std::max(std::hypot(dx, dy), 1e-15));
@@ -704,16 +707,16 @@ Result<ChassisController> ChassisController::create(ChassisConfig config) {
     impl->config = std::move(config);
     const auto& c = impl->config;
     auto& l = impl->limits;
-    l.linear_velocity = c.max_linear;
-    l.linear_acceleration = c.max_linear_acceleration;
-    l.linear_deceleration = c.max_linear_deceleration;
-    l.linear_reversal_deceleration = c.max_linear_reversal_deceleration;
-    l.linear_jerk = c.max_linear_jerk;
-    l.angular_velocity = c.max_angular;
-    l.angular_acceleration = c.max_angular_acceleration;
-    l.angular_deceleration = c.max_angular_deceleration;
-    l.angular_reversal_deceleration = c.max_angular_reversal_deceleration;
-    l.angular_jerk = c.max_angular_jerk;
+    l.max_linear_velocity = c.max_linear_velocity;
+    l.max_linear_acceleration = c.max_linear_acceleration;
+    l.max_linear_deceleration = c.max_linear_deceleration;
+    l.max_linear_reversal_deceleration = c.max_linear_reversal_deceleration;
+    l.max_linear_jerk = c.max_linear_jerk;
+    l.max_angular_velocity = c.max_angular_velocity;
+    l.max_angular_acceleration = c.max_angular_acceleration;
+    l.max_angular_deceleration = c.max_angular_deceleration;
+    l.max_angular_reversal_deceleration = c.max_angular_reversal_deceleration;
+    l.max_angular_jerk = c.max_angular_jerk;
     l.planner_mode = c.kinematics == ChassisKinematics::differential ? ChassisPlannerMode::straight
                                                                      : ChassisPlannerMode::axis_phase;
     return ChassisController(std::move(impl));

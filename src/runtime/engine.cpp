@@ -16,7 +16,16 @@
 #if defined(__linux__)
 #include <pthread.h>
 #include <sched.h>
+#include <fcntl.h>
+#include <spawn.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include <fstream>
+
+extern char** environ;
 #endif
 
 namespace kstone {
@@ -169,7 +178,90 @@ bool glob_match(const std::string& pattern, const std::string& text) {
     return p == pattern.size();
 }
 
+#if defined(__linux__)
+bool has_effective_capability(int cap) {
+    std::ifstream in("/proc/self/status");
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.rfind("CapEff:", 0) != 0) continue;
+        const unsigned long long mask = std::stoull(line.substr(7), nullptr, 16);
+        return ((mask >> cap) & 1ULL) != 0;
+    }
+    return false;
+}
+
+struct LimitNeed {
+    bool rtprio{false};
+    bool memlock{false};
+};
+
+LimitNeed missing_limits(const ThreadOptions& t) {
+    constexpr int cap_ipc_lock = 14, cap_sys_nice = 23;
+    LimitNeed need;
+    rlimit r{};
+    if (t.priority > 0 && !has_effective_capability(cap_sys_nice) && getrlimit(RLIMIT_RTPRIO, &r) == 0 &&
+        r.rlim_cur != RLIM_INFINITY && r.rlim_cur < static_cast<rlim_t>(t.priority))
+        need.rtprio = true;
+    if (t.lock_memory && !has_effective_capability(cap_ipc_lock) && getrlimit(RLIMIT_MEMLOCK, &r) == 0 &&
+        r.rlim_cur != RLIM_INFINITY)
+        need.memlock = true;
+    return need;
+}
+#endif
+
 }  // namespace
+
+Status elevate_thread_limits(const ThreadOptions& thread, const Logger& log) {
+#if defined(__linux__)
+    if (auto s = validate_thread(thread); !s) return s;
+    const LimitNeed need = missing_limits(thread);
+    if (!need.rtprio && !need.memlock) return {};
+    const int tty = ::open("/dev/tty", O_RDWR | O_CLOEXEC);
+    if (tty < 0)
+        return make_error(ErrorCode::unsupported,
+                          "elevate: no controlling terminal for the sudo password prompt; raise the limits "
+                          "another way (setcap, limits.d) or run from a terminal");
+    ::close(tty);
+
+    std::vector<std::string> args = {"sudo", "-p", "[kstone] sudo password for %u to raise real-time limits: ",
+                                     "--", "prlimit", "--pid", std::to_string(::getpid())};
+    std::string what;
+    if (need.rtprio) {
+        args.push_back("--rtprio=" + std::to_string(thread.priority));
+        what = "rtprio " + std::to_string(thread.priority);
+    }
+    if (need.memlock) {
+        args.push_back("--memlock=unlimited");
+        what += std::string(what.empty() ? "" : ", ") + "memlock unlimited";
+    }
+    std::vector<char*> argv;
+    for (std::string& a : args) argv.push_back(a.data());
+    argv.push_back(nullptr);
+    if (log.enabled(LogLevel::info)) log.log(LogLevel::info, "engine", "elevate: running sudo prlimit for " + what);
+
+    pid_t pid = 0;
+    const int rc = ::posix_spawnp(&pid, "sudo", nullptr, nullptr, argv.data(), environ);
+    if (rc != 0) return make_error(ErrorCode::io_error, std::string("elevate: cannot start sudo: ") + std::strerror(rc));
+    int status = 0;
+    while (::waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR)
+            return make_error(ErrorCode::io_error, std::string("elevate: waitpid: ") + std::strerror(errno));
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+        return make_error(ErrorCode::io_error,
+                          "elevate: sudo prlimit failed (exit " +
+                              std::to_string(WIFEXITED(status) ? WEXITSTATUS(status) : -1) + ")");
+    const LimitNeed after = missing_limits(thread);
+    if (after.rtprio || after.memlock)
+        return make_error(ErrorCode::io_error, "elevate: limits still too low after sudo prlimit");
+    if (log.enabled(LogLevel::info)) log.log(LogLevel::info, "engine", "elevate: raised " + what);
+    return {};
+#else
+    (void)thread;
+    (void)log;
+    return make_error(ErrorCode::unsupported, "elevate: only supported on Linux");
+#endif
+}
 
 RobotInterface::~RobotInterface() = default;
 EngineObserver::~EngineObserver() = default;
@@ -580,7 +672,7 @@ Status Engine::run(double duration_s, const std::atomic<bool>* stop) {
         return make_error(ErrorCode::invalid_argument,
                           "engine: run needs a positive duration or a stop flag");
     ThreadScope scope;
-    scope.apply(d.options.thread, d.context.log);
+    if (d.options.realtime) scope.apply(d.options.thread, d.context.log);
     const bool bounded = duration_s > 0.0;
     const Clock& clock = *d.context.clock;
     const double t0 = d.stats.time;
@@ -609,9 +701,12 @@ Status Engine::run(double duration_s, const std::atomic<bool>* stop) {
         } else {
             failed = 0;
         }
-        if (!d.options.realtime) continue;
         deadline += d.dt_ns;
-        const std::int64_t remaining = deadline - clock.now_ns();
+        std::int64_t remaining = deadline - clock.now_ns();
+        if (remaining > d.dt_ns) {  // Clock stalled or went back: wait one period instead of the accumulated gap.
+            remaining = d.dt_ns;
+            deadline = clock.now_ns() + remaining;
+        }
         if (remaining > 0) {
             // Sliced so a stop request is seen within ~50 ms even at very low rates.
             constexpr std::int64_t slice_ns = 50'000'000;

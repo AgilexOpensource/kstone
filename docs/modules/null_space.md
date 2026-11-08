@@ -1,12 +1,12 @@
-# null_space_preference
+# null_space
 
-[中文](../zh-CN/modules/null_space_preference.md) · [Module overview](README.md)
+[中文](../zh-CN/modules/null_space.md) · [Module overview](README.md)
 
-Applies a preference in the null space of a frame_task (`primary`) without affecting that task's end-effector tracking. The preference can be switched at runtime without allocating.
+Applies a preference in the null space of a frame_target (`primary`) without affecting that task's end-effector tracking. The preference can be switched at runtime without allocating.
 
 ## Key parameters
 
-- `primary`: id of the frame_task, which also becomes a dependency. With `joints` empty, the scalar joints driven by primary are used.
+- `primary`: id of the frame_target, which also becomes a dependency. With `joints` empty, the scalar joints driven by primary are used.
 - `preference`:
   - `posture`: stay close to a reference posture.
   - `manipulability`: raise manipulability; `manipulability_axes` selects the directions (translation only by default).
@@ -28,7 +28,7 @@ Applies a preference in the null space of a frame_task (`primary`) without affec
 
 ```yaml
 left_null:
-  type: null_space_preference
+  type: null_space
   primary: left
   reference: initial
   posture_weight: 0.05
@@ -44,6 +44,6 @@ null.tune({"preference": "joint_limits"})
 
 ## Pitfalls
 
-- Runs only while no other module owns its joints. In the example `left_arm` (joint_target, `claim_idle: true`) owns the left arm, so `left_null` stays held.
+- Runs only while no other module owns its joints. In the example `left_arm` (joint_target, `on_idle: claim`) owns the left arm, so `left_null` stays held.
 - The preference lives in the null space and does not cost primary any accuracy. But axes freed in primary (weight 0) are part of the null space too, and the preference will move them.
 - When the reference posture is far from what the target pose allows, the preference only gets as close as the redundant degrees of freedom permit. The joints will not reach the reference values.

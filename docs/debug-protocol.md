@@ -20,7 +20,6 @@ The debug server (`kstone run --serve`, `Engine.serve` or `DebugServer`) speaks 
 | `hello` | On connect |
 | `model` | Once authenticated |
 | `params`, `solver_params`, `joint_limits` | After `model`, and to every client after a successful tune |
-| `lease` | After auth and whenever the control lease changes |
 | `state` | Per subscription |
 | `reply` | For every request |
 
@@ -28,17 +27,21 @@ The debug server (`kstone run --serve`, `Engine.serve` or `DebugServer`) speaks 
 |---|---|
 | `auth`, `ping` | Authenticate, check the connection |
 | `subscribe` | Set the `state` rate; 0 stops it |
-| `acquire`, `release` | Take or give back the control lease |
 | `set_port`, `set_enabled`, `home` | Command a module |
+| `home_all` | Home every homeable module currently in control (`ModuleSet::home_all`) |
 | `tune`, `tune_solver`, `tune_limits` | Change module, solver or joint limit parameters |
 | `pause`, `step`, `set_rate` | Pause the engine, step while paused, change the control rate |
 | `asset` | Fetch a file the URDF references, such as a mesh; only when listed in `capabilities` |
 
-Commands are rejected with `lease_held` while another client holds the lease. With no holder, any client may command. A lease is released when its client disconnects.
+The ops `set_port` through `set_rate` in the table are commands. Arbitration works like this:
+
+- Clients are equal: any client may command, and the last write wins.
+- Motion ports (the frame and joint targets and the chassis motion ports) give your own code priority. After your code writes one (`write_port`, a setter or the chassis controller, not through the server), it is held for `api_hold_s` (default 1 s). Server `set_port` on any motion port of that module gets `api_owned`. Everything else, including `home`, tuning, enabling, pausing and stepping, is last-write-wins. `state` lists held ports per module in `api_held`.
+- A rejected command is dropped, never queued or replayed. Once the hold ends the port keeps the last value your code wrote until a client sends a new command.
 
 ## Errors and limits
 
-- `code` is an error code name (such as `invalid_argument`), or one of `unauthorized`, `lease_held`, `busy`, `timeout` and `unsupported` (unknown op).
+- `code` is an error code name (such as `invalid_argument`), or one of `unauthorized`, `api_owned`, `busy`, `timeout` and `unsupported` (unknown op).
 - At most 8 clients. A further connection gets a reply with `code` `busy` instead of `hello`, and is closed.
 - Non-finite numbers are sent as `null`.
 - A client that reads slower than its subscription skips `state` messages. One with 8 MiB of other output queued is closed.

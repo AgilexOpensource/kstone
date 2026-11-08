@@ -39,8 +39,9 @@ ParamSchema<PoseTrajectoryConfig> pose_trajectory() {
     s.field("sync", &PoseTrajectoryConfig::sync,
             {{"axis_phase", PoseSync::axis_phase}, {"axis_time", PoseSync::axis_time}})
         .tunable();
-    s.field("translation", &PoseTrajectoryConfig::translation, motion_limits()).doc("World axes (m, s).");
-    s.field("rotation", &PoseTrajectoryConfig::rotation, motion_limits()).doc("Error-aligned axes (rad, s).");
+    s.field("position", &PoseTrajectoryConfig::position, motion_limits()).doc("World axes (m, s).");
+    s.field("orientation", &PoseTrajectoryConfig::orientation, motion_limits())
+        .doc("Error-aligned axes (rad, s).");
     s.field("lead_speed_scale", &PoseTrajectoryConfig::lead_speed_scale)
         .at_least(0)
         .tunable()
@@ -65,7 +66,7 @@ ParamSchema<JointTrajectoryConfig> joint_trajectory() {
     s.field("acceleration_factor", &JointTrajectoryConfig::acceleration_factor).above(0).tunable();
     s.field("jerk_factor", &JointTrajectoryConfig::jerk_factor).above(0).tunable();
     s.field("velocity_scale", &JointTrajectoryConfig::velocity_scale).above(0).at_most(1).tunable();
-    s.field("velocity_cap", &JointTrajectoryConfig::velocity_cap)
+    s.field("max_velocity", &JointTrajectoryConfig::max_velocity)
         .above(0)
         .allow_infinite()
         .tunable()
@@ -83,8 +84,8 @@ ParamSchema<HomeConfig> home_config() {
     return s;
 }
 
-ParamSchema<FrameTaskModuleConfig> frame_task() {
-    using C = FrameTaskModuleConfig;
+ParamSchema<FrameTargetModuleConfig> frame_target() {
+    using C = FrameTargetModuleConfig;
     ParamSchema<C> s("Frame pose task fed by a jerk-limited trajectory.");
     s.field("frame", &C::frame).required().non_empty();
     s.field("joints", &C::joints).doc("Driven joints; empty = root to frame.");
@@ -138,17 +139,17 @@ ParamSchema<JointTargetModuleConfig> joint_target() {
     s.field("velocity_limit", &C::velocity_limit)
         .above(0)
         .doc("Per joint, capped by the solver (model) limit; empty = model limits.");
-    s.field("tolerance", &C::tolerance).above(0).tunable().doc("Arrival per joint.");
+    s.field("position_tolerance", &C::position_tolerance).above(0).tunable().doc("Arrival per joint.");
     s.field("priority", &C::priority).tunable().doc("Claim priority.");
     s.field("on_held", &C::on_held, {{"wait", OnHeld::wait}, {"abort", OnHeld::abort}})
         .tunable()
         .doc("When held: wait resumes the target, abort drops it.");
-    s.field("hold_idle", &C::hold_idle)
+    s.field("on_idle", &C::on_idle,
+            {{"release", OnIdle::release}, {"hold", OnIdle::hold}, {"claim", OnIdle::claim}})
         .tunable()
-        .doc("Idle: true holds the last target; false drops the task so others move the joints.");
-    s.field("claim_idle", &C::claim_idle)
-        .tunable()
-        .doc("Idle: also hold the last target and claim the joints, so conflicting modules stay held.");
+        .doc(
+            "Idle: release frees the joints, hold keeps the last target, claim also keeps conflicting "
+            "modules held.");
     s.field("release_after_s", &C::release_after_s)
         .at_least(0)
         .tunable()
@@ -199,7 +200,7 @@ ParamSchema<CenterOfMassModuleConfig> center_of_mass() {
     s.field("gain", &C::gain).above(0).at_most(1).tunable();
     s.field("recovery_speed", &C::recovery_speed).above(0).tunable();
     s.field("payloads", &C::payloads, payload()).tunable();
-    s.ref("recovery_tasks", &C::recovery_tasks, "frame_task")
+    s.ref("recovery_tasks", &C::recovery_tasks, "frame_target")
         .doc(
             "Joints that compensate and pull the CoM back; the others stop at the boundary once these "
             "saturate, never pulled back. Empty = all joints.");
@@ -219,10 +220,10 @@ ParamSchema<NullSpaceSettings> null_space_settings() {
     return s;
 }
 
-ParamSchema<NullSpacePreferenceModuleConfig> null_space_preference() {
-    using C = NullSpacePreferenceModuleConfig;
+ParamSchema<NullSpaceModuleConfig> null_space() {
+    using C = NullSpaceModuleConfig;
     ParamSchema<C> s("Null-space preference under a frame task.");
-    s.ref("primary", &C::primary, "frame_task").required();
+    s.ref("primary", &C::primary, "frame_target").required();
     s.field("joints", &C::joints).doc("Empty = the primary's driven scalar joints.");
     s.field("preference", &C::preference,
             {{"posture", NullSpacePreference::posture},
@@ -283,8 +284,8 @@ ParamSchema<BodyGroup> body_group() {
 ParamSchema<CollisionConstraintOptions> collision_constraint() {
     using C = CollisionConstraintOptions;
     ParamSchema<C> s("Collision avoidance rows.");
-    s.field("d_min", &C::d_min).at_least(0).tunable().doc("Distance kept between pairs (m).");
-    s.field("gain", &C::gain).at_least(0).tunable().doc("Approach speed per metre above d_min (1/s).");
+    s.field("clearance", &C::clearance).at_least(0).tunable().doc("Distance kept between pairs (m).");
+    s.field("gain", &C::gain).at_least(0).tunable().doc("Approach speed per metre above clearance (1/s).");
     s.field("activation_margin", &C::activation_margin).at_least(0).tunable();
     s.field("hysteresis", &C::hysteresis).at_least(0).tunable();
     s.field("approach_deceleration", &C::approach_deceleration)
@@ -293,7 +294,7 @@ ParamSchema<CollisionConstraintOptions> collision_constraint() {
         .doc("0 disables braking.");
     s.field("max_rows", &C::max_rows).above(0);
     s.field("max_cuts", &C::max_cuts).at_least(0).doc("Cutting-plane rows; 0 disables them.");
-    s.field("clip_slack", &C::clip_slack).at_least(0).doc("Endpoint clip floor below d_min (m).");
+    s.field("clip_slack", &C::clip_slack).at_least(0).doc("Endpoint clip floor below clearance (m).");
     s.field("exempt_penetrating", &C::exempt_penetrating)
         .tunable()
         .doc("Leave pairs already penetrating on entering the band free until clear.");
@@ -350,7 +351,7 @@ struct WorldCollisionParams {
     std::vector<WorldObstacle> obstacles;
     CollisionConstraintOptions constraint;
     bool closed_loop{false};
-    double velocity_timeout{0.2};
+    double velocity_timeout_s{0.2};
 };
 
 ParamSchema<Shape> shape() {
@@ -392,7 +393,7 @@ ParamSchema<WorldCollisionParams> world_collision() {
     s.field("closed_loop", &C::closed_loop)
         .tunable()
         .doc("Also bound the measured state (fresh feedback), on top of the commanded one.");
-    s.field("velocity_timeout", &C::velocity_timeout)
+    s.field("velocity_timeout_s", &C::velocity_timeout_s)
         .at_least(0)
         .tunable()
         .doc(
@@ -417,7 +418,7 @@ Result<std::shared_ptr<Module>> make_world_collision(const std::string& id, Worl
     config.obstacles = std::move(p.obstacles);
     config.constraint = p.constraint;
     config.closed_loop = p.closed_loop;
-    config.velocity_timeout = p.velocity_timeout;
+    config.velocity_timeout_s = p.velocity_timeout_s;
     return std::shared_ptr<Module>(std::make_shared<WorldCollisionModule>(id, std::move(config)));
 }
 
@@ -426,14 +427,14 @@ ParamSchema<ChassisConfig> chassis_config() {
     ParamSchema<C> s("Chassis controller.");
     s.field("kinematics", &C::kinematics,
             {{"omni", ChassisKinematics::omni}, {"differential", ChassisKinematics::differential}});
-    s.field("target_translation_deadband", &C::target_translation_deadband).at_least(0);
-    s.field("target_rotation_deadband", &C::target_rotation_deadband).at_least(0);
+    s.field("target_position_deadband", &C::target_position_deadband).at_least(0);
+    s.field("target_orientation_deadband", &C::target_orientation_deadband).at_least(0);
     s.field("odom_timeout_s", &C::odom_timeout_s).above(0);
     s.field("command_timeout_s", &C::command_timeout_s).above(0);
     s.field("max_dt_s", &C::max_dt_s).above(0);
     s.field("allowed_missed_cycles", &C::allowed_missed_cycles).at_least(0);
-    s.field("max_linear", &C::max_linear).above(0);
-    s.field("max_angular", &C::max_angular).above(0);
+    s.field("max_linear_velocity", &C::max_linear_velocity).above(0);
+    s.field("max_angular_velocity", &C::max_angular_velocity).above(0);
     s.field("max_linear_acceleration", &C::max_linear_acceleration).above(0);
     s.field("max_linear_deceleration", &C::max_linear_deceleration).above(0);
     s.field("max_linear_reversal_deceleration", &C::max_linear_reversal_deceleration).above(0);
@@ -442,25 +443,25 @@ ParamSchema<ChassisConfig> chassis_config() {
     s.field("max_angular_reversal_deceleration", &C::max_angular_reversal_deceleration).above(0);
     s.field("max_linear_jerk", &C::max_linear_jerk).above(0);
     s.field("max_angular_jerk", &C::max_angular_jerk).above(0);
-    s.field("arrival_position_tolerance", &C::arrival_position_tolerance).above(0);
-    s.field("arrival_rotation_tolerance", &C::arrival_rotation_tolerance).above(0);
+    s.field("position_tolerance", &C::position_tolerance).above(0);
+    s.field("orientation_tolerance", &C::orientation_tolerance).above(0);
     s.field("base_frame", &C::base_frame).non_empty();
     return s;
 }
 
 ParamSchema<ChassisPoseLimits> chassis_pose_limits() {
     using C = ChassisPoseLimits;
-    ParamSchema<C> s("Pose-goal shaping limits; 0 disables a bound, all 0 emits the unshaped twist.");
-    s.field("linear_velocity", &C::linear_velocity).at_least(0).tunable();
-    s.field("linear_acceleration", &C::linear_acceleration).at_least(0).tunable();
-    s.field("linear_deceleration", &C::linear_deceleration).at_least(0).tunable();
-    s.field("linear_reversal_deceleration", &C::linear_reversal_deceleration).at_least(0).tunable();
-    s.field("linear_jerk", &C::linear_jerk).at_least(0).tunable();
-    s.field("angular_velocity", &C::angular_velocity).at_least(0).tunable();
-    s.field("angular_acceleration", &C::angular_acceleration).at_least(0).tunable();
-    s.field("angular_deceleration", &C::angular_deceleration).at_least(0).tunable();
-    s.field("angular_reversal_deceleration", &C::angular_reversal_deceleration).at_least(0).tunable();
-    s.field("angular_jerk", &C::angular_jerk).at_least(0).tunable();
+    ParamSchema<C> s("Pose-target shaping limits; 0 disables a bound, all 0 emits the unshaped twist.");
+    s.field("max_linear_velocity", &C::max_linear_velocity).at_least(0).tunable();
+    s.field("max_linear_acceleration", &C::max_linear_acceleration).at_least(0).tunable();
+    s.field("max_linear_deceleration", &C::max_linear_deceleration).at_least(0).tunable();
+    s.field("max_linear_reversal_deceleration", &C::max_linear_reversal_deceleration).at_least(0).tunable();
+    s.field("max_linear_jerk", &C::max_linear_jerk).at_least(0).tunable();
+    s.field("max_angular_velocity", &C::max_angular_velocity).at_least(0).tunable();
+    s.field("max_angular_acceleration", &C::max_angular_acceleration).at_least(0).tunable();
+    s.field("max_angular_deceleration", &C::max_angular_deceleration).at_least(0).tunable();
+    s.field("max_angular_reversal_deceleration", &C::max_angular_reversal_deceleration).at_least(0).tunable();
+    s.field("max_angular_jerk", &C::max_angular_jerk).at_least(0).tunable();
     s.field("planner_mode", &C::planner_mode,
             {{"axis_phase", ChassisPlannerMode::axis_phase},
              {"axis_time", ChassisPlannerMode::axis_time},
@@ -474,7 +475,7 @@ ParamSchema<ChassisModuleConfig> chassis_module() {
     ParamSchema<C> s("Chassis controller outside the QP; drives the model root.");
     s.field("chassis", &C::chassis, chassis_config());
     s.field("center_in_root", &C::center_in_root);
-    s.field("period", &C::period)
+    s.field("period_s", &C::period_s)
         .above(0)
         .doc("Initial scheduler period (s); the engine dt replaces it each cycle.");
     return s;
@@ -502,7 +503,7 @@ ParamSchema<WorldCollisionModuleConfig> world_collision_module() {
     s.field("closed_loop", &WorldCollisionModuleConfig::closed_loop)
         .tunable()
         .doc("Also bound the measured state (fresh feedback), on top of the commanded one.");
-    s.field("velocity_timeout", &WorldCollisionModuleConfig::velocity_timeout)
+    s.field("velocity_timeout_s", &WorldCollisionModuleConfig::velocity_timeout_s)
         .at_least(0)
         .tunable()
         .doc(
@@ -521,7 +522,7 @@ ParamSchema<SolverOptions> solver_options() {
         .tunable();
     s.field("damping", &SolverOptions::damping).above(0).tunable();
     s.field("limit_gain", &SolverOptions::limit_gain).above(0).at_most(1).tunable();
-    s.field("feasibility_tol", &SolverOptions::feasibility_tol).above(0).tunable();
+    s.field("feasibility_tolerance", &SolverOptions::feasibility_tolerance).above(0).tunable();
     s.field("check_feasibility", &SolverOptions::check_feasibility).tunable();
     s.field("hold_retry", &SolverOptions::hold_retry).tunable();
     return s;
@@ -531,8 +532,8 @@ ParamSchema<SolverOptions> solver_options() {
 
 namespace builtin_schemas {
 
-const ParamSchema<FrameTaskModuleConfig>& frame_task() {
-    static const auto s = kstone::frame_task();
+const ParamSchema<FrameTargetModuleConfig>& frame_target() {
+    static const auto s = kstone::frame_target();
     return s;
 }
 const ParamSchema<JointTargetModuleConfig>& joint_target() {
@@ -547,8 +548,8 @@ const ParamSchema<CenterOfMassModuleConfig>& center_of_mass() {
     static const auto s = kstone::center_of_mass();
     return s;
 }
-const ParamSchema<NullSpacePreferenceModuleConfig>& null_space_preference() {
-    static const auto s = kstone::null_space_preference();
+const ParamSchema<NullSpaceModuleConfig>& null_space() {
+    static const auto s = kstone::null_space();
     return s;
 }
 const ParamSchema<SelfCollisionModuleConfig>& self_collision() {
@@ -573,11 +574,11 @@ const ParamSchema<SolverOptions>& solver() {
 ModuleRegistry ModuleRegistry::with_builtins() {
     ModuleRegistry r;
     // Types are distinct and factories non-null, so these cannot fail.
-    (void)r.add<FrameTaskModule>("frame_task", builtin_schemas::frame_task());
+    (void)r.add<FrameTargetModule>("frame_target", builtin_schemas::frame_target());
     (void)r.add<JointTargetModule>("joint_target", builtin_schemas::joint_target());
     (void)r.add<GazeModule>("gaze", builtin_schemas::gaze());
     (void)r.add<CenterOfMassModule>("center_of_mass", builtin_schemas::center_of_mass());
-    (void)r.add<NullSpacePreferenceModule>("null_space_preference", builtin_schemas::null_space_preference());
+    (void)r.add<NullSpaceModule>("null_space", builtin_schemas::null_space());
     (void)r.add("self_collision", self_collision(), make_self_collision);
     (void)r.add("world_collision", world_collision(), make_world_collision);
     (void)r.add<ChassisModule>("chassis", chassis_module());

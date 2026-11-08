@@ -19,7 +19,7 @@ bool finite_positive(double value) { return std::isfinite(value) && value > 0.0;
 bool same(const JointTrajectoryConfig& a, const JointTrajectoryConfig& b) {
     return a.trigger == b.trigger && a.sync == b.sync && a.acceleration_factor == b.acceleration_factor &&
            a.jerk_factor == b.jerk_factor && a.velocity_scale == b.velocity_scale &&
-           a.velocity_cap.size() == b.velocity_cap.size() && a.velocity_cap == b.velocity_cap;
+           a.max_velocity.size() == b.max_velocity.size() && a.max_velocity == b.max_velocity;
 }
 
 ruckig::Synchronization to_ruckig(JointSync sync) {
@@ -67,13 +67,13 @@ Status JointTrajectoryConfig::validate(Eigen::Index size) const {
         return make_error(ErrorCode::invalid_argument, "joint trajectory: threshold must be finite and >= 0");
     if (!std::isfinite(velocity_scale) || velocity_scale <= 0.0 || velocity_scale > 1.0)
         return make_error(ErrorCode::invalid_argument, "joint trajectory: velocity_scale must be in (0, 1]");
-    if (velocity_cap.size() != 0 && velocity_cap.size() != size)
+    if (max_velocity.size() != 0 && max_velocity.size() != size)
         return make_error(ErrorCode::invalid_argument,
-                          "joint trajectory: velocity_cap needs one entry per joint");
-    for (Eigen::Index i = 0; i < velocity_cap.size(); ++i)
-        if (!(velocity_cap[i] > 0.0))
+                          "joint trajectory: max_velocity needs one entry per joint");
+    for (Eigen::Index i = 0; i < max_velocity.size(); ++i)
+        if (!(max_velocity[i] > 0.0))
             return make_error(ErrorCode::invalid_argument,
-                              "joint trajectory: velocity_cap entries must be > 0");
+                              "joint trajectory: max_velocity entries must be > 0");
     return {};
 }
 
@@ -214,7 +214,7 @@ Status JointTrajectory::step(const Eigen::Ref<const Eigen::VectorXd>& measured,
             s.wrap[k] ? s.reference[i] + std::remainder(measured[i] - s.reference[i], kTwoPi) - s.error[i]
                       : target[i];
         double cruise = c.velocity_scale * s.limits[i];
-        if (c.velocity_cap.size() != 0) cruise = std::min(cruise, c.velocity_cap[i]);
+        if (c.max_velocity.size() != 0) cruise = std::min(cruise, c.max_velocity[i]);
         s.input.max_velocity[k] = cruise;
         s.input.max_acceleration[k] = c.acceleration_factor * s.limits[i];
         s.input.max_jerk[k] = c.jerk_factor * s.input.max_acceleration[k];

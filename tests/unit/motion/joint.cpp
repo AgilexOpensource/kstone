@@ -91,7 +91,7 @@ TEST_CASE("joint trajectory: continuous converges within limits") {
 TEST_CASE("joint trajectory: velocity cap lowers the cruise") {
     JointTrajectoryConfig config;
     config.trigger = JointTrigger::continuous;
-    config.velocity_cap = vec({0.1, std::numeric_limits<double>::infinity()});
+    config.max_velocity = vec({0.1, std::numeric_limits<double>::infinity()});
     config.sync = JointSync::none;
     JointTrajectory trajectory = make(2, config);
     Eigen::VectorXd position = Eigen::VectorXd::Zero(2);
@@ -170,11 +170,11 @@ TEST_CASE("joint trajectory: rejects bad input") {
     config.velocity_scale = 1.5;
     CHECK_FALSE(JointTrajectory::create(1, config));
     config.velocity_scale = 1.0;
-    config.velocity_cap = vec({0.0});
+    config.max_velocity = vec({0.0});
     CHECK_FALSE(JointTrajectory::create(1, config));
-    config.velocity_cap = vec({1.0, 1.0});
+    config.max_velocity = vec({1.0, 1.0});
     CHECK_FALSE(JointTrajectory::create(1, config));
-    config.velocity_cap.resize(0);
+    config.max_velocity.resize(0);
     config.trigger = JointTrigger::continuous;
     JointTrajectory trajectory = make(1, config);
     JointTrajectoryConfig negative;

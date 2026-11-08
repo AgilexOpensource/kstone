@@ -22,7 +22,6 @@
 | `hello` | 连上时 |
 | `model` | 认证通过后 |
 | `params`、`solver_params`、`joint_limits` | `model` 之后，以及调参成功后发给所有客户端 |
-| `lease` | 认证后，以及控制租约变化时 |
 | `state` | 按订阅频率 |
 | `reply` | 每个请求一条 |
 
@@ -30,18 +29,22 @@
 |---|---|
 | `auth`、`ping` | 认证、检查连接 |
 | `subscribe` | 设置 `state` 频率；0 停止 |
-| `acquire`、`release` | 取得或交还控制租约 |
 | `set_port`、`set_enabled`、`home` | 控制模块 |
+| `home_all` | 让当前持有控制权的可回 home 模块全部回 home（`ModuleSet::home_all`） |
 | `tune`、`tune_solver`、`tune_limits` | 修改模块、求解器或关节限位参数 |
 | `pause`、`step`、`set_rate` | 暂停引擎、暂停时单步、修改控制频率 |
 | `asset` | 获取 URDF 引用的文件（如网格）；仅当 `capabilities` 中列出时可用 |
 
-其他客户端持有租约时，命令会被拒绝，返回 `lease_held`。无人持有时任何客户端都可以发命令。客户端断开时其租约自动释放。
+表中 `set_port` 到 `set_rate` 这些 op 属于命令。仲裁规则如下：
+
+- 客户端之间平等：任何客户端都可以发命令，最后写入的生效。
+- 运动端口（frame 和关节目标、底盘运动端口）优先给你的代码。你的代码（`write_port`、setter 或底盘控制器，不经服务端）写入后，该端口保持 `api_hold_s`（默认 1 秒），此期间服务端对该模块任一运动端口的 `set_port` 返回 `api_owned`。其他操作（包括 `home`、调参、启用、暂停和单步）都按最后写入生效。`state` 的每个模块用 `api_held` 列出被保持的端口。
+- 被拒绝的命令直接丢弃，不排队也不重放。保持结束后端口维持代码最后写入的值，直到客户端发来新命令。
 
 <a id="errors-and-limits"></a>
 ## 错误与限制
 
-- `code` 是错误码名（如 `invalid_argument`），或 `unauthorized`、`lease_held`、`busy`、`timeout`、`unsupported`（未知 op）之一。
+- `code` 是错误码名（如 `invalid_argument`），或 `unauthorized`、`api_owned`、`busy`、`timeout`、`unsupported`（未知 op）之一。
 - 最多 8 个客户端。再连入的连接收到 `code` 为 `busy` 的 reply 而不是 `hello`，随后被关闭。
 - 非有限数值以 `null` 发送。
 - 读取慢于订阅频率的客户端会跳过部分 `state`。其他待发输出积压到 8 MiB 的客户端会被断开。
