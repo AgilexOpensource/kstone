@@ -101,6 +101,31 @@ TEST_CASE("chassis: odometry replaces the integrated pose while fresh") {
     CHECK(ctrl.snapshot(1.0).source == PoseSource::internal);
 }
 
+TEST_CASE("chassis: zero odometry timeout never goes stale; start and resynchronize seed the pose") {
+    ChassisConfig config;
+    config.odom_timeout_s = 0.0;
+    auto ctrl = started(config, 0.01);
+    CHECK(accepted(ctrl.submit_odometry({1, 0, 0}, 0.0, 100.0)));
+    CHECK(ctrl.snapshot(1000.0).source == PoseSource::odometry);
+    config.odom_timeout_s = -1.0;
+    CHECK_FALSE(ChassisController::create(config));
+
+    auto seeded = ChassisController::create({});
+    REQUIRE(seeded);
+    REQUIRE(seeded->set_scheduler_period(0.01));
+    CHECK_FALSE(seeded->start(0.0, Pose2D{std::nan(""), 0, 0}));
+    REQUIRE(seeded->start(0.0, Pose2D{1, 2, 0.5}));
+    seeded->step(0.01);
+    CHECK(seeded->pose().x == doctest::Approx(1.0));
+    CHECK(seeded->pose().y == doctest::Approx(2.0));
+    CHECK(seeded->pose().yaw == doctest::Approx(0.5));
+    REQUIRE(seeded->pause(0.02));
+    CHECK_FALSE(seeded->resynchronize(0.03, Pose2D{0, std::numeric_limits<double>::infinity(), 0}));
+    REQUIRE(seeded->resynchronize(0.03, Pose2D{-1, 0, 0}));
+    CHECK(seeded->pose().x == -1.0);
+    CHECK(seeded->state() == ChassisState::active);
+}
+
 TEST_CASE("chassis: omni pose mode is bounded and reaches the goal") {
     for (double dt : {0.01, 0.02, 0.05, 0.08}) {
         INFO("dt=" << dt);

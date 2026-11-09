@@ -15,7 +15,14 @@ void take_snapshot(const Engine& engine, EngineSnapshot& out) {
     out.cycle_p999_s = out.stats.cycle_hist.quantile(0.999);
     out.paused = engine.paused();
     out.fresh = engine.fresh();
+    out.attached = engine.attached();
     out.written = engine.written();
+    if (out.groups.size() != engine.group_count()) out.groups.resize(engine.group_count());
+    for (std::size_t i = 0; i < out.groups.size(); ++i) {
+        out.groups[i].name = engine.group_name(i);
+        out.groups[i].fresh = engine.group_fresh(i);
+        out.groups[i].attached = engine.group_attached(i);
+    }
     out.state.q = engine.state().q;
     out.state.v = engine.state().v;
     out.state.stamp_ns = engine.state().stamp_ns;

@@ -84,6 +84,8 @@ typedef struct kstone_engine_status {
     double* command_v; /* nv */
     double* ideal;     /* nq: commanded state the next solve starts from */
     double* measured;  /* nq: measured estimate; meaningful only when has_measured */
+    int attached;      /* fresh for feedback_timeout_s, synced every cycle; forward to hardware only then */
+    uint64_t attaches; /* attachments, including the first one */
 } kstone_engine_status;
 
 KSTONE_EXPORT uint32_t kstone_engine_abi_version(void);
@@ -113,9 +115,20 @@ KSTONE_EXPORT void kstone_engine_set_paused(kstone_engine* engine, int paused);
 KSTONE_EXPORT int kstone_engine_snapshot(const kstone_engine* engine, kstone_engine_status* out, char* error,
                                          size_t error_size);
 
+/* Feedback groups (see kstone::Engine::group_count): configured feedback_groups in order, then "default".
+ * The name is NULL when i is out of range; fresh and attached are 0 then. */
+KSTONE_EXPORT size_t kstone_engine_group_count(const kstone_engine* engine);
+KSTONE_EXPORT const char* kstone_engine_group_name(const kstone_engine* engine, size_t i);
+KSTONE_EXPORT int kstone_engine_group_fresh(const kstone_engine* engine, size_t i);
+KSTONE_EXPORT int kstone_engine_group_attached(const kstone_engine* engine, size_t i);
+
 /* Takes effect on the next cycle; n must match the port's flat size. */
 KSTONE_EXPORT int kstone_engine_set_port(kstone_engine* engine, const char* module, const char* port,
                                          const double* values, size_t n, char* error, size_t error_size);
+/* Writes only the n named elements of a vector port (labels[k] gets values[k]); the others keep their value. */
+KSTONE_EXPORT int kstone_engine_set_port_labeled(kstone_engine* engine, const char* module, const char* port,
+                                                 const char* const* labels, const double* values, size_t n,
+                                                 char* error, size_t error_size);
 /* *n receives the flat size; values may be NULL to query it, otherwise capacity must be at least that size. */
 KSTONE_EXPORT int kstone_engine_read_port(const kstone_engine* engine, const char* module, const char* port,
                                           double* values, size_t capacity, size_t* n, char* error,

@@ -227,6 +227,11 @@ expect_error("invalid_argument", arm.write_port, target["name"], [1.0, 2.0])
 expect_error("invalid_argument", arm.write_port, target["name"], "abc")
 arm.write_port(target["name"], [0.3, -0.2, 0.1])
 assert np.allclose(arm.read_port(target["name"]), [0.3, -0.2, 0.1])
+arm.write_port(target["name"], [0.5], labels=[target["labels"][1]])
+assert np.allclose(arm.read_port(target["name"]), [0.3, 0.5, 0.1])
+expect_error("invalid_argument", lambda: arm.write_port(target["name"], [0.5], labels=["nope"]))
+expect_error("invalid_argument", lambda: arm.write_port(target["name"], [0.5, 0.1], labels=[target["labels"][0]]))
+arm.write_port(target["name"], [0.3, -0.2, 0.1])
 
 tool = e.module("tool")
 pose = next(p for p in tool.ports if p["type"] == "pose")
@@ -317,7 +322,7 @@ assert "arm/joints" in {t["name"] for t in r.residuals} and 0.0 < r.step_scale <
 e.run(0.5)
 assert e.stats["cycles"] == 51, e.stats
 assert abs(e.time - 0.51) < 1e-9
-assert e.feedback_timeout_s == 0.25 and e.quality in ("nominal", "degraded")
+assert e.feedback_timeout_s == 0.0 and e.quality in ("nominal", "degraded")
 assert e.stats["repeated_reads"] == 0 and e.stats["max_lateness_s"] == 0.0, e.stats
 assert e.stats["guard_rejects"] == 0 and e.stats["guard_clamps"] == 0, e.stats
 assert 0.0 < e.stats["cycle_p50_s"] <= e.stats["cycle_p99_s"] <= e.stats["cycle_p999_s"] <= e.stats["max_cycle_s"]
@@ -351,7 +356,16 @@ for bad in (0.0, float("nan")):
 e.set_rate_hz(rate)
 e.step()
 assert e.ideal.shape == e.q.shape
-assert e.fresh and e.written and e.command["fresh"] and e.measured is not None
+assert e.fresh and e.attached and e.written and e.command["fresh"] and e.measured is not None
+assert e.stats["attaches"] == 0 and e.snapshot()["attached"]
+assert e.feedback_groups == [] and e.groups == [{"name": "default", "fresh": True, "attached": True}]
+assert e.snapshot()["groups"] == e.groups
+grouped = kstone.load_engine_from_string(
+    "feedback_groups: [{name: hand, joints: [finger_left_joint]}]\n" + (fixtures / "arm_loopback.yaml").read_text(),
+    base_dir=fixtures,
+)
+assert grouped.feedback_groups == [{"name": "hand", "joints": ["finger_left_joint"]}]
+assert [g["name"] for g in grouped.groups] == ["hand", "default"]
 assert e.command["q"].shape == e.q.shape and e.command["v"].shape == e.v.shape
 
 snap = e.snapshot()

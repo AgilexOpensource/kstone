@@ -125,6 +125,7 @@ Fixture make(CommandGuardOptions guard, double solver_velocity = 0.0, double j1 
     EngineOptions options;
     options.rate_hz = 1.0 / kDt;
     options.safety = guard;
+    options.feedback_timeout_s = 0.0;  // steps use virtual time; attach timing would follow the wall clock
     auto e = Engine::create(std::move(*set), robot, options, context);
     REQUIRE_MESSAGE(e, message(e));
     return {*model, probe, robot, std::move(*e)};

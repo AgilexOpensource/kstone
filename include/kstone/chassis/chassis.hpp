@@ -57,7 +57,7 @@ struct ChassisConfig {
     ChassisKinematics kinematics{ChassisKinematics::omni};
     double target_position_deadband{0.0};  ///< Differential: goal moves below this keep the current path.
     double target_orientation_deadband{0.0};
-    double odom_timeout_s{0.25};
+    double odom_timeout_s{0.25};  ///< 0 = odometry never goes stale. The chassis module uses the engine feedback_timeout_s.
     double command_timeout_s{0.25};
     double max_dt_s{0.1};
     int allowed_missed_cycles{2};
@@ -147,12 +147,12 @@ class KSTONE_EXPORT ChassisController {
     /// While active, a changed period takes effect on the next step (which then emits no new output).
     Status set_scheduler_period(double period);
     std::optional<double> scheduler_period() const noexcept;
-    /// configured -> active; requires a scheduler period.
-    Status start(double now);
+    /// configured -> active; requires a scheduler period. `pose` (finite) replaces the initial pose.
+    Status start(double now, const std::optional<Pose2D>& pose = std::nullopt);
     /// active -> paused; clears motion.
     Status pause(double now);
-    /// paused | fault -> active.
-    Status resynchronize(double now);
+    /// paused | fault -> active; `pose` (finite) replaces the current pose, e.g. the measured one.
+    Status resynchronize(double now, const std::optional<Pose2D>& pose = std::nullopt);
     /// Any state -> stopped (terminal).
     void stop(double now);
 

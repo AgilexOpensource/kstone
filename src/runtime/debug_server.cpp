@@ -87,6 +87,7 @@ struct Command {
     std::size_t module{0};
     std::size_t port{0};
     PortValue value;
+    std::vector<Eigen::Index> elements;  ///< set_port with 'labels': the vector elements written.
     bool enabled{false};
     std::uint64_t cycles{0};
     double rate_hz{0.0};
@@ -138,6 +139,9 @@ struct Snapshot {
     Eigen::VectorXd q_command;
     bool paused{false};
     bool fresh{true};
+    bool attached{true};
+    std::vector<std::uint8_t> group_fresh;
+    std::vector<std::uint8_t> group_attached;
     double rate_hz{0.0};
     std::vector<ModuleFrame> modules;
     std::vector<TaskResidual> residuals;
@@ -193,6 +197,7 @@ constexpr StatInfo kStats[] = {
     {"held_cycles", "counter", [](const EngineStats& s) { return static_cast<double>(s.held_cycles); }},
     {"stale_cycles", "counter", [](const EngineStats& s) { return static_cast<double>(s.stale_cycles); }},
     {"resyncs", "counter", [](const EngineStats& s) { return static_cast<double>(s.resyncs); }},
+    {"attaches", "counter", [](const EngineStats& s) { return static_cast<double>(s.attaches); }},
     {"failed_cycles", "counter", [](const EngineStats& s) { return static_cast<double>(s.failed_cycles); }},
     {"last_cycle", "duration", [](const EngineStats& s) { return s.last_cycle_s; }},
     {"cycle_p50", "duration", [](const EngineStats& s) { return s.cycle_hist.quantile(0.5); }},
@@ -356,6 +361,7 @@ struct DebugServer::Impl {
     ConfigNode capabilities;
     SteadyClock::duration publish_period{};
     std::vector<std::string> module_ids;
+    std::vector<std::string> group_names;
     // Solver task name -> (module index, local task name), for residual ownership.
     std::unordered_map<std::string, std::pair<std::size_t, std::string>> task_owners;
     std::vector<std::vector<PortInfo>> ports;
@@ -411,6 +417,8 @@ struct DebugServer::Impl {
         for (Snapshot& s : snapshots) {
             s.q.setZero(engine.modules().model()->nq());
             s.q_command.setZero(engine.modules().model()->nq());
+            s.group_fresh.assign(group_names.size(), 0);
+            s.group_attached.assign(group_names.size(), 0);
             s.modules.resize(mods.size());
             for (std::size_t m = 0; m < mods.size(); ++m) {
                 s.modules[m].ports.resize(ports[m].size());
@@ -657,7 +665,9 @@ struct DebugServer::Impl {
             if (take && !owned) {
                 switch (c->op) {
                     case Op::set_port:
-                        s = mods[c->module]->write_port(c->port, c->value);
+                        s = c->elements.empty()
+                                ? mods[c->module]->write_port(c->port, c->value)
+                                : mods[c->module]->write_port(c->port, c->elements, c->value.vector);
                         seen_writes[c->module][c->port] = mods[c->module]->write_count(c->port);
                         break;
                     case Op::set_enabled:
@@ -722,6 +732,11 @@ struct DebugServer::Impl {
         s.paused = engine.paused();
         s.rate_hz = engine.options().rate_hz;
         s.fresh = engine.fresh();
+        s.attached = engine.attached();
+        for (std::size_t g = 0; g < group_names.size(); ++g) {
+            s.group_fresh[g] = engine.group_fresh(g);
+            s.group_attached[g] = engine.group_attached(g);
+        }
         s.stats = engine.stats();
         const auto now = SteadyClock::now();
         if (now >= next_display) {
@@ -902,7 +917,27 @@ struct DebugServer::Impl {
                                   "module '" + module_ids[m] + "' has no port '" + port->as_string() + "'");
             cmd.op = Op::set_port;
             cmd.port = p;
-            return decode(list[p], doc.find("value"), cmd.value);
+            const ConfigNode* labels = doc.find("labels");
+            if (labels == nullptr) return decode(list[p], doc.find("value"), cmd.value);
+            const PortInfo& info = list[p];
+            if (info.type != PortType::vector || labels->kind() != ConfigNode::Kind::list || labels->size() == 0)
+                return make_error(ErrorCode::invalid_argument,
+                                  "'labels' needs a non-empty list on a vector port ('" + info.name + "')");
+            for (const ConfigNode& l : labels->items()) {
+                const auto it = l.kind() == ConfigNode::Kind::string
+                                    ? std::find(info.labels.begin(), info.labels.end(), l.as_string())
+                                    : info.labels.end();
+                if (it == info.labels.end())
+                    return make_error(ErrorCode::invalid_argument,
+                                      "port '" + info.name + "' has no element " +
+                                          (l.kind() == ConfigNode::Kind::string ? l.as_string() : "(non-string)"));
+                cmd.elements.push_back(static_cast<Eigen::Index>(it - info.labels.begin()));
+            }
+            if (!read_numbers(doc.find("value"), static_cast<Eigen::Index>(cmd.elements.size()), cmd.value.vector))
+                return make_error(ErrorCode::invalid_argument, "bad value for port '" + info.name + "', expected " +
+                                                                   std::to_string(cmd.elements.size()) +
+                                                                   " finite numbers, one per label");
+            return {};
         }
         return make_error(ErrorCode::unsupported, "unknown op '" + name + "'");
     }
@@ -1162,6 +1197,13 @@ struct DebugServer::Impl {
         doc.set("paused", s.paused);
         doc.set("rate_hz", s.rate_hz);
         doc.set("fresh", s.fresh);
+        doc.set("attached", s.attached);
+        ConfigNode groups = ConfigNode::list();
+        for (std::size_t g = 0; g < group_names.size(); ++g)
+            groups.append(ConfigNode::map({{"name", group_names[g]},
+                                           {"fresh", s.group_fresh[g] != 0},
+                                           {"attached", s.group_attached[g] != 0}}));
+        doc.set("groups", std::move(groups));
         ConfigNode stats = ConfigNode::map();
         for (const StatInfo& info : kStats) stats.set(info.name, info.read(s.stats));
         doc.set("stats", std::move(stats));
@@ -1355,6 +1397,7 @@ Result<std::shared_ptr<DebugServer>> DebugServer::start(Engine& engine, const De
         std::chrono::duration<double>(1.0 / options.publish_hz));
     d->api_hold =
         std::chrono::duration_cast<SteadyClock::duration>(std::chrono::duration<double>(options.api_hold_s));
+    for (std::size_t g = 0; g < engine.group_count(); ++g) d->group_names.push_back(engine.group_name(g));
     for (const auto& m : engine.modules().modules()) {
         d->module_ids.push_back(m->id());
         for (const std::string& task : engine.modules().tasks(m->id()))

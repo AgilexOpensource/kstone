@@ -3,6 +3,7 @@
 #include "kstone/core/error.hpp"
 #include "kstone/core/export.hpp"
 #include "kstone/model/model.hpp"
+#include "kstone/runtime/engine.hpp"
 #include "kstone/runtime/robot.hpp"
 
 #include <Eigen/Core>
@@ -10,6 +11,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace kstone {
 
@@ -22,6 +24,8 @@ struct RobotPluginOptions {
     double rate_hz{100.0};
     /// Initial q (size nq) offered to the plugin; empty = model neutral.
     Eigen::VectorXd initial;
+    /// Must match the engine's EngineOptions::feedback_groups; sets kstone_robot_config.groups.
+    std::vector<FeedbackGroup> feedback_groups;
 };
 
 /// Loads a C-ABI robot driver. The library stays loaded until the returned robot is destroyed.

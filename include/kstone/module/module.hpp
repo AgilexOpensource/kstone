@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -24,7 +25,7 @@ namespace kstone {
 struct Cycle {
     double now;
     double dt;
-    std::uint64_t index;  ///< +1 per ModuleSet::step; skips one after resynchronize().
+    std::uint64_t index;  ///< +1 per ModuleSet::step; skips one after a full resynchronize().
     Eigen::Ref<Eigen::VectorXd>
         q;  ///< Configuration solved from (the engine's ideal state); writable in prepare() only.
     const Eigen::VectorXd& v;    ///< Velocity at q (size nv; the engine passes the last command).
@@ -38,6 +39,7 @@ struct Cycle {
     const Eigen::VectorXd* lower_limit{nullptr};
     const Eigen::VectorXd* upper_limit{nullptr};
     std::uint64_t limits_revision{0};  ///< Changes whenever the solver options may have changed the limits.
+    bool resynced{false};  ///< This module's joints were resynchronized since its last prepare(); homings abort.
 };
 
 /// What a running module does when it becomes held.
@@ -158,6 +160,8 @@ class KSTONE_EXPORT ModuleSetup {
     /// Effective position limits as in Cycle::lower_limit / upper_limit, at configure time.
     const Eigen::VectorXd& lower_limit() const noexcept;
     const Eigen::VectorXd& upper_limit() const noexcept;
+    /// ModuleSet::set_feedback_timeout() (the engine sets its feedback_timeout_s; 0 = never stale); empty if unset.
+    std::optional<double> feedback_timeout_s() const noexcept;
     /// Tasks are held (disabled in the solver) whenever the module is not running.
     Result<TaskHandle> add_task(const std::string& name, std::shared_ptr<Task> task,
                                 TaskOptions options = {});
@@ -234,6 +238,14 @@ class KSTONE_EXPORT Module {
     virtual Status read_port(std::size_t index, PortValue& out) const;
     /// Counts accepted writes (write_count()) and forwards to on_write_port().
     Status write_port(std::size_t index, const PortValue& value);
+    /// Writes only the elements of vector port ports()[index] named in `labels` (values[k] for labels[k], any
+    /// subset, any order); the others keep their value. Unknown or duplicate labels change nothing. Counts as a
+    /// write and forwards to on_write_port_elements().
+    Status write_port(std::size_t index, const std::vector<std::string>& labels,
+                      const Eigen::Ref<const Eigen::VectorXd>& values);
+    /// Same with indices into ports()[index].labels; no steady-state allocation.
+    Status write_port(std::size_t index, const std::vector<Eigen::Index>& elements,
+                      const Eigen::Ref<const Eigen::VectorXd>& values);
     /// Accepted writes of ports()[index] so far, including typed setters; 0 if out of range.
     std::uint64_t write_count(std::size_t index) const noexcept {
         return index < write_counts_.size() ? write_counts_[index] : 0;
@@ -267,6 +279,10 @@ class KSTONE_EXPORT Module {
   protected:
     /// `index` is in range of ports().
     virtual Status on_write_port(std::size_t index, const PortValue& value);
+    /// `index` is a vector port; `elements` are distinct and in range, one per value. Default: read_port(),
+    /// overwrite those elements, then on_write_port().
+    virtual Status on_write_port_elements(std::size_t index, const std::vector<Eigen::Index>& elements,
+                                          const Eigen::Ref<const Eigen::VectorXd>& values);
     /// Counts a write of ports()[index] made outside write_port(), e.g. by a typed setter.
     void mark_written(std::size_t index) noexcept {
         if (index < write_counts_.size()) ++write_counts_[index];
@@ -302,6 +318,9 @@ class KSTONE_EXPORT Module {
     bool tasks_dirty_{false};
     std::vector<PortInfo> ports_;
     std::vector<std::uint64_t> write_counts_;
+    std::vector<Eigen::Index> elements_;
+    std::vector<char> element_seen_;
+    PortValue element_value_;
     std::vector<VisualInfo> visuals_;
     std::vector<OutputInfo> outputs_;
     std::string id_;
@@ -340,6 +359,8 @@ class KSTONE_EXPORT ModuleSet {
     Status add(std::shared_ptr<Module> module);
     /// Before configure() only; finite, size nq. Reference for "initial" postures (default: model neutral).
     Status set_initial(const Eigen::VectorXd& q);
+    /// Before configure() only; finite, >= 0. Feedback staleness bound offered to modules (ModuleSetup).
+    Status set_feedback_timeout(double seconds);
     /// Orders modules by dependency (ties keep add order) and configures them once.
     /// not_found on a missing dependency, invalid_argument on a cycle.
     Status configure();
@@ -354,6 +375,9 @@ class KSTONE_EXPORT ModuleSet {
     /// The next step() skips one Cycle::index (running homings abort) and calls reset() on every running
     /// module, as after being held. rebase: modules also drop their held targets (Cycle::rebase).
     void resynchronize(bool rebase = false) noexcept;
+    /// Same, limited to modules whose driven or locked (ModuleSetup::lock) joints intersect `dofs` (size nv): only they see Cycle::resynced
+    /// (and Cycle::rebase) and get reset(); Cycle::index does not skip.
+    void resynchronize(bool rebase, const Mask& dofs);
     /// request_home() on every enabled, homeable module in control of some joints as of the last step: the
     /// granted claim holder, else the latest to request_control() there. Joints nobody controls, or
     /// controlled by a non-homeable module (e.g. gaze), are left alone. Returns the first error.

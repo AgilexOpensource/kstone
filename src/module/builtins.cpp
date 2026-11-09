@@ -575,8 +575,27 @@ Status JointTargetModule::set_target(const std::vector<std::string>& joints,
         seen_[i] = true;
         partial_[static_cast<Index>(i)] = values[static_cast<Index>(k)];
     }
+    if (Status s = commit_partial(); !s) return s;
+    mark_written(0);
+    return {};
+}
+
+Status JointTargetModule::on_write_port_elements(std::size_t index, const std::vector<Index>& elements,
+                                                 const Eigen::Ref<const Eigen::VectorXd>& values) {
+    if (index != 0) return Module::on_write_port_elements(index, elements, values);
+    if (!task_) return not_configured("joint_target '" + id() + "'");
+    partial_ = target_;
+    std::fill(seen_.begin(), seen_.end(), false);
+    for (std::size_t k = 0; k < elements.size(); ++k) {
+        seen_[static_cast<std::size_t>(elements[k])] = true;
+        partial_[elements[k]] = values[static_cast<Index>(k)];
+    }
+    return commit_partial();
+}
+
+Status JointTargetModule::commit_partial() {
     const bool was_filling = filling_;
-    if (Status s = set_target(partial_); !s) return s;
+    if (Status s = apply_target(partial_); !s) return s;
     // Disabled or held: target_ is stale, so omitted joints hold where the robot is when it resumes.
     if (!enabled() || !running()) {
         for (std::size_t i = 0; i < seen_.size(); ++i) fill_[i] = !seen_[i] && (!was_filling || fill_[i]);
@@ -1619,6 +1638,7 @@ Status ChassisModule::configure(ModuleSetup& setup) {
     const JointInfo& root = model.joints().at(1);
     Mask locked(static_cast<std::size_t>(model.nv()));
     locked.set_range(static_cast<std::size_t>(root.idx_v), static_cast<std::size_t>(root.nv));
+    if (const std::optional<double> timeout = setup.feedback_timeout_s()) config_.chassis.odom_timeout_s = *timeout;
     Result<ChassisController> ctrl = ChassisController::create(config_.chassis);
     if (!ctrl) return std::move(ctrl).error();
     if (Status s = ctrl->set_scheduler_period(config_.period_s); !s) return s;
@@ -1771,13 +1791,28 @@ Status ChassisModule::read_output(std::size_t index, OutputValue& out) const {
 
 Status ChassisModule::prepare(Cycle& cycle) {
     ChassisController& c = *controller_;
+    auto measured_center = [&]() -> Result<Pose2D> {
+        Result<Eigen::Isometry3d> root = model_->root_pose(cycle.q);
+        if (!root) return std::move(root).error();
+        const Eigen::Isometry3d center = *root * config_.center_in_root;
+        return Pose2D{center.translation().x(), center.translation().y(),
+                      std::atan2(center.linear()(1, 0), center.linear()(0, 0))};
+    };
     if (c.state() == ChassisState::configured) {
-        if (Status s = c.start(cycle.now); !s) return s;
-    } else if (stepped_ && cycle.index != last_index_ + 1) {
+        Result<Pose2D> initial = measured_center();
+        if (!initial) return std::move(initial).error();
+        if (Status s = c.start(cycle.now, *initial); !s) return s;
+    } else if (stepped_ && (cycle.index != last_index_ + 1 || cycle.resynced)) {
         if (c.state() == ChassisState::active)
             if (Status s = c.pause(cycle.now); !s) return s;
+        std::optional<Pose2D> measured;
+        if (cycle.resynced && cycle.rebase) {
+            Result<Pose2D> center = measured_center();
+            if (!center) return std::move(center).error();
+            measured = *center;
+        }
         if (c.state() == ChassisState::paused || c.state() == ChassisState::fault)
-            if (Status s = c.resynchronize(cycle.now); !s) return s;
+            if (Status s = c.resynchronize(cycle.now, measured); !s) return s;
     }
     if (cycle.dt > 0.0)
         if (Status s = c.set_scheduler_period(cycle.dt); !s) return s;

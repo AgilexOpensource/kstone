@@ -2,6 +2,7 @@
 model:
   file: arm.urdf
 rate_hz: 100
+feedback_timeout_s: 0  # loopback feedback is ideal; step() may run faster than real time
 solver:
   mode: weighted
 robot:

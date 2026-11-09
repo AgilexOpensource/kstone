@@ -6,8 +6,10 @@
 
 #include <doctest/doctest.h>
 
+#include <chrono>
 #include <filesystem>
 #include <string>
+#include <thread>
 
 using namespace kstone;
 namespace fs = std::filesystem;
@@ -79,8 +81,9 @@ TEST_CASE("robot plugin: driver errors keep their code and message") {
 
 TEST_CASE("robot plugin: write sees the fresh flag and stale commands are still written") {
     // flaky leaves stamps unknown, so its feedback is stale unless the timeout is 0.
-    auto e =
-        build_engine(plugin_config(KSTONE_FLAKY_ROBOT, ConfigNode::map({{"reject_stale", true}})), kFixtures);
+    ConfigNode stale = plugin_config(KSTONE_FLAKY_ROBOT, ConfigNode::map({{"reject_stale", true}}));
+    stale.set("feedback_timeout_s", 0.25);
+    auto e = build_engine(stale, kFixtures);
     REQUIRE_MESSAGE(e, message(e));
     Status s = e->step(0.01);
     REQUIRE_FALSE(s);
@@ -94,6 +97,32 @@ TEST_CASE("robot plugin: write sees the fresh flag and stale commands are still 
     s = e->step(0.01);
     CHECK_MESSAGE(s, message(s));
     CHECK(e->fresh());
+}
+
+TEST_CASE("robot plugin: feedback groups reach the driver and attach on their own") {
+    ConfigNode cfg = plugin_config(KSTONE_FLAKY_ROBOT, ConfigNode::map({{"report_groups", true}}));
+    cfg.set("feedback_timeout_s", 0.03);
+    cfg.set("feedback_groups",
+            ConfigNode::list({ConfigNode::map(
+                {{"name", "hand"}, {"joints", ConfigNode::list({ConfigNode("finger_left_joint")})}})}));
+    auto e = build_engine(cfg, kFixtures);
+    REQUIRE_MESSAGE(e, message(e));
+    REQUIRE(e->group_count() == 2);
+    CHECK(e->group_name(0) == "hand");
+    CHECK(e->group_name(1) == "default");
+    // flaky stamps only the hand group; it reports group_attached once the hand has attached.
+    Status s;
+    for (int i = 0; i < 200 && s; ++i) {
+        s = e->step(e->stats().time + e->dt());
+        if (s) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    REQUIRE_FALSE(s);
+    CHECK(s.error().message == "robot plugin 'flaky': write failed: fresh=0 groups=2 hand=1 default=0");
+    CHECK(e->group_fresh(0));
+    CHECK_FALSE(e->group_fresh(1));
+    CHECK(e->group_attached(0));
+    CHECK_FALSE(e->group_attached(1));
+    CHECK_FALSE(e->attached());
 }
 
 TEST_CASE("robot plugin: loading errors") {

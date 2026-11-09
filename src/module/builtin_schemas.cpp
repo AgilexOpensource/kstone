@@ -429,7 +429,6 @@ ParamSchema<ChassisConfig> chassis_config() {
             {{"omni", ChassisKinematics::omni}, {"differential", ChassisKinematics::differential}});
     s.field("target_position_deadband", &C::target_position_deadband).at_least(0);
     s.field("target_orientation_deadband", &C::target_orientation_deadband).at_least(0);
-    s.field("odom_timeout_s", &C::odom_timeout_s).above(0);
     s.field("command_timeout_s", &C::command_timeout_s).above(0);
     s.field("max_dt_s", &C::max_dt_s).above(0);
     s.field("allowed_missed_cycles", &C::allowed_missed_cycles).at_least(0);

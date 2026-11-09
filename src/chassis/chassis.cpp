@@ -220,11 +220,11 @@ Status ChassisConfig::validate() const {
     const std::pair<double, const char*> nonnegative[] = {
         {target_position_deadband, "target_position_deadband"},
         {target_orientation_deadband, "target_orientation_deadband"},
+        {odom_timeout_s, "odom_timeout_s"},
     };
     for (const auto& [value, name] : nonnegative)
         if (auto status = require_nonnegative(value, name); !status) return status;
     const std::pair<double, const char*> positive[] = {
-        {odom_timeout_s, "odom_timeout_s"},
         {command_timeout_s, "command_timeout_s"},
         {max_dt_s, "max_dt_s"},
         {max_linear_velocity, "max_linear_velocity"},
@@ -312,8 +312,12 @@ struct ChassisController::Impl {
         return command_stamp && now - *command_stamp >= 0 && now - *command_stamp <= config.command_timeout_s;
     }
 
+    double odom_timeout() const {
+        return config.odom_timeout_s > 0 ? config.odom_timeout_s : std::numeric_limits<double>::infinity();
+    }
+
     bool odom_fresh(double now) const {
-        return odom_stamp && now - *odom_stamp >= 0 && now - *odom_stamp <= config.odom_timeout_s;
+        return odom_stamp && now - *odom_stamp >= 0 && now - *odom_stamp <= odom_timeout();
     }
 
     void clear_motion() {
@@ -380,7 +384,7 @@ struct ChassisController::Impl {
             return;
         }
         const bool fresh = odom_fresh(now);
-        if (odom_stamp) begin = std::max(begin, *odom_stamp + config.odom_timeout_s);
+        if (odom_stamp) begin = std::max(begin, *odom_stamp + odom_timeout());
         const double end = output_valid_until ? std::min(now, *output_valid_until) : now;
         const double dt = output_valid_until ? std::max(0.0, end - begin) : 0.0;
         if (!fresh && planned_pose_override && pose_target && config.kinematics == ChassisKinematics::omni)
@@ -755,11 +759,13 @@ Status ChassisController::set_scheduler_period(double period) {
 
 std::optional<double> ChassisController::scheduler_period() const noexcept { return impl_->period; }
 
-Status ChassisController::start(double now) {
+Status ChassisController::start(double now, const std::optional<Pose2D>& pose) {
     auto& m = *impl_;
     if (m.state != ChassisState::configured)
         return make_error(ErrorCode::invalid_argument, "chassis: can only start from configured");
     if (!m.period) return make_error(ErrorCode::invalid_argument, "chassis: scheduler period is not set");
+    if (pose && !finite(*pose)) return make_error(ErrorCode::invalid_argument, "chassis: pose must be finite");
+    if (pose) m.pose = m.ramp = *pose;
     m.last_step = m.integrated_until = now;
     m.state = ChassisState::active;
     m.reason = ChassisReason::ready;
@@ -776,11 +782,13 @@ Status ChassisController::pause(double /*now*/) {
     return {};
 }
 
-Status ChassisController::resynchronize(double now) {
+Status ChassisController::resynchronize(double now, const std::optional<Pose2D>& pose) {
     auto& m = *impl_;
     if (m.state != ChassisState::paused && m.state != ChassisState::fault)
         return make_error(ErrorCode::invalid_argument,
                           "chassis: can only resynchronize while paused or faulted");
+    if (pose && !finite(*pose)) return make_error(ErrorCode::invalid_argument, "chassis: pose must be finite");
+    if (pose) m.pose = *pose;
     m.clear_motion();
     m.last_step = m.integrated_until = now;
     m.state = ChassisState::active;
@@ -833,7 +841,7 @@ Result<bool> ChassisController::submit_odometry(const Pose2D& pose, double stamp
     if (!finite(pose) || !std::isfinite(stamp))
         return make_error(ErrorCode::invalid_argument, "chassis: odometry must be finite");
     if (m.state == ChassisState::stopped) return false;
-    if (now - stamp < 0 || now - stamp > m.config.odom_timeout_s) return false;
+    if (now - stamp < 0 || now - stamp > m.odom_timeout()) return false;
     if (m.odom_stamp && stamp <= *m.odom_stamp) return false;
     m.advance_pose(now);
     m.pose = pose;

@@ -1,7 +1,7 @@
 """kstone: inverse kinematics and control."""
 
 import os
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -380,16 +380,19 @@ class Module:
             'orientation': [w, x, y, z]}.
         """
 
-    def write_port(self, name: str, value: Any) -> None:
+    def write_port(self, name: str, value: Any, labels: Sequence[str] | None = None) -> None:
         """Set an input port; the module uses it from the next step.
 
         Args:
             name: Port name; see ports.
             value: A float, bool or sequence of the port's size. A pose takes a 4x4
                 matrix or {'position': [x, y, z], 'orientation': [w, x, y, z]}.
+            labels: For a vector port, write only these elements (names from the
+                port's labels), one value each; the others keep their value.
 
         Example:
             engine.module("arm").write_port("target", [0.5, 0.0, 0.0])
+            engine.module("arm").write_port("target", [0.2], labels=["elbow"])
         """
 
     def home(self) -> None:
@@ -547,6 +550,10 @@ class Engine:
         """Joints whose measured position feeds back into the solve."""
 
     @property
+    def feedback_groups(self) -> list[dict[str, Any]]:
+        """Configured feedback groups: [{name, joints}]."""
+
+    @property
     def safety(self) -> dict[str, Any]:
         """Command check settings: mode ('reject', 'clamp' or 'off'), velocity_scale, tolerance."""
 
@@ -617,6 +624,14 @@ class Engine:
     @property
     def fresh(self) -> bool:
         """False when robot feedback is older than feedback_timeout_s."""
+
+    @property
+    def attached(self) -> bool:
+        """True once feedback stayed fresh for feedback_timeout_s, synced every cycle; forward to hardware only then."""
+
+    @property
+    def groups(self) -> list[dict[str, Any]]:
+        """Feedback groups, configured ones then 'default': [{name, fresh, attached}]; attached is per group."""
 
     @property
     def written(self) -> bool:

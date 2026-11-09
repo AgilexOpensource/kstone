@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <exception>
 #include <filesystem>
@@ -27,6 +28,7 @@ struct kstone_engine {
     kstone::Engine engine;
     std::atomic<bool> stop{false};
     mutable kstone::PortValue scratch;  // Reused by set_port/read_port so steady-state calls do not allocate.
+    std::vector<Eigen::Index> elements;  // Reused by set_port_labeled.
 };
 
 namespace {
@@ -159,6 +161,20 @@ size_t kstone_engine_nv(const kstone_engine* engine) {
 
 double kstone_engine_dt(const kstone_engine* engine) { return engine ? engine->engine.dt() : 0.0; }
 
+size_t kstone_engine_group_count(const kstone_engine* engine) { return engine ? engine->engine.group_count() : 0; }
+
+const char* kstone_engine_group_name(const kstone_engine* engine, size_t i) {
+    return engine && i < engine->engine.group_count() ? engine->engine.group_name(i).c_str() : nullptr;
+}
+
+int kstone_engine_group_fresh(const kstone_engine* engine, size_t i) {
+    return engine && engine->engine.group_fresh(i) ? 1 : 0;
+}
+
+int kstone_engine_group_attached(const kstone_engine* engine, size_t i) {
+    return engine && engine->engine.group_attached(i) ? 1 : 0;
+}
+
 int kstone_engine_step(kstone_engine* engine, double now, char* error, std::size_t error_size) {
     return guarded(error, error_size, [&]() -> int {
         if (!engine) return fail(error, error_size, ErrorCode::invalid_argument, "null engine");
@@ -188,7 +204,7 @@ int kstone_engine_snapshot(const kstone_engine* engine, kstone_engine_status* ou
                            std::size_t error_size) {
     return guarded(error, error_size, [&]() -> int {
         if (!engine || !out) return fail(error, error_size, ErrorCode::invalid_argument, "null argument");
-        if (out->struct_size < sizeof(kstone_engine_status))
+        if (out->struct_size < offsetof(kstone_engine_status, attached))
             return fail(error, error_size, ErrorCode::invalid_argument, "snapshot struct_size too small");
         const kstone::Engine& e = engine->engine;
         const kstone::EngineStats& st = e.stats();
@@ -229,6 +245,10 @@ int kstone_engine_snapshot(const kstone_engine* engine, kstone_engine_status* ou
             copy_out(*measured, out->measured, nq);
         else if (out->measured)
             std::fill(out->measured, out->measured + nq, 0.0);
+        if (out->struct_size >= offsetof(kstone_engine_status, attaches) + sizeof(out->attaches)) {
+            out->attached = e.attached();
+            out->attaches = st.attaches;
+        }
         return KSTONE_ENGINE_OK;
     });
 }
@@ -274,6 +294,32 @@ int kstone_engine_set_port(kstone_engine* engine, const char* module, const char
             }
         }
         const kstone::Status s = p.module->write_port(p.index, v);
+        return s ? KSTONE_ENGINE_OK : fail(error, error_size, s.error());
+    });
+}
+
+int kstone_engine_set_port_labeled(kstone_engine* engine, const char* module, const char* port,
+                                   const char* const* labels, const double* values, size_t n, char* error,
+                                   std::size_t error_size) {
+    return guarded(error, error_size, [&]() -> int {
+        Port p;
+        if (const int rc = find_port(engine, module, port, p, error, error_size)) return rc;
+        const kstone::PortInfo& info = p.module->ports()[p.index];
+        if (n > 0 && (!labels || !values))
+            return fail(error, error_size, ErrorCode::invalid_argument, "null labels or values");
+        auto& elements = engine->elements;
+        elements.clear();
+        for (std::size_t k = 0; k < n; ++k) {
+            if (!labels[k]) return fail(error, error_size, ErrorCode::invalid_argument, "null label");
+            std::size_t e = 0;
+            while (e < info.labels.size() && info.labels[e] != labels[k]) ++e;
+            if (e == info.labels.size())
+                return fail(error, error_size, ErrorCode::invalid_argument,
+                            (info.name + ": no element " + labels[k]).c_str());
+            elements.push_back(static_cast<Eigen::Index>(e));
+        }
+        const kstone::Status s = p.module->write_port(
+            p.index, elements, Eigen::Map<const Eigen::VectorXd>(values, static_cast<Eigen::Index>(n)));
         return s ? KSTONE_ENGINE_OK : fail(error, error_size, s.error());
     });
 }

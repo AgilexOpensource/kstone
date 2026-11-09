@@ -227,21 +227,25 @@ TEST_CASE("debug server: hello, state, commands and replies over loopback") {
     client.send(R"({"op":"set_port","id":3,"module":"arm","port":"target","value":[1]})");
     client.send(R"({"op":"set_enabled","id":4,"module":"fingers","enabled":false})");
     client.send("not json");
+    client.send(R"({"op":"set_port","id":5,"module":"arm","port":"target","labels":["j3"],"value":[0.8]})");
+    client.send(R"({"op":"set_port","id":6,"module":"arm","port":"target","labels":["j9"],"value":[0.8]})");
 
-    bool ok[5]{};
-    bool seen[5]{};
-    for (int n = 0; n < 5; ++n) {
+    bool ok[7]{};
+    bool seen[7]{};
+    for (int n = 0; n < 7; ++n) {
         ConfigNode reply = client.read_type("reply");
         const ConfigNode* id = reply.find("id");
         const int i =
             id != nullptr && id->kind() == ConfigNode::Kind::number ? static_cast<int>(id->as_number()) : 0;
         REQUIRE(i >= 0);
-        REQUIRE(i < 5);
+        REQUIRE(i < 7);
         seen[i] = true;
         ok[i] = reply.find("ok")->as_bool();
         if (!ok[i]) CHECK(reply.find("error") != nullptr);
     }
-    CHECK((seen[0] && seen[1] && seen[2] && seen[3] && seen[4]));
+    CHECK((seen[0] && seen[1] && seen[2] && seen[3] && seen[4] && seen[5] && seen[6]));
+    CHECK(ok[5]);
+    CHECK_FALSE(ok[6]);
     CHECK(ok[1]);
     CHECK_FALSE(ok[2]);
     CHECK_FALSE(ok[3]);
@@ -262,6 +266,7 @@ TEST_CASE("debug server: hello, state, commands and replies over loopback") {
         const auto& target = module_node(state, "arm")->find("ports")->find("target")->items();
         REQUIRE(target.size() == 3);
         CHECK(target[0].as_number() == doctest::Approx(0.5));
+        CHECK(target[2].as_number() == doctest::Approx(0.8));
         CHECK(state.find("stats")->find("cycles")->as_number() > 0);
         bool owned = false;
         for (const ConfigNode& r : state.find("residuals")->items()) {
@@ -793,9 +798,17 @@ TEST_CASE("debug server: pause and step ops") {
     std::thread runner([&] { CHECK(e->run(0.0, &stop)); });
 
     {
+        // The fixture uses feedback_timeout_s = 0, so the engine is attached from the start.
         const ConfigNode st = client.read_type("state");
         CHECK_FALSE(st.find("paused")->as_bool());
         CHECK(st.find("fresh")->as_bool());
+        CHECK(st.find("attached")->as_bool());
+        const auto& groups = st.find("groups")->items();
+        REQUIRE(groups.size() == 1);
+        CHECK(groups[0].find("name")->as_string() == "default");
+        CHECK(groups[0].find("fresh")->as_bool());
+        CHECK(groups[0].find("attached")->as_bool());
+        CHECK(st.find("stats")->find("attaches")->as_number() == 0);
         CHECK(st.find("stats")->find("held_cycles")->as_number() == 0);
         CHECK(st.find("q_command")->items().size() == st.find("q")->items().size());
     }
@@ -850,7 +863,8 @@ TEST_CASE("debug server: module visuals and display outputs") {
   </joint>
 </robot>)");
     auto doc = parse_yaml(
-        "model: {file: pair.urdf}\nrate_hz: 100\nrobot: {type: loopback, initial: [0.265, 0]}\n"
+        "model: {file: pair.urdf}\nrate_hz: 100\nfeedback_timeout_s: 0\n"
+        "robot: {type: loopback, initial: [0.265, 0]}\n"
         "modules:\n  collision: {type: self_collision, urdf: " +
             (dir / "pair.urdf").string() +
             "}\n"

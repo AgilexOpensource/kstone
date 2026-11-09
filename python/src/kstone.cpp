@@ -512,7 +512,7 @@ py::dict stats_dict(const kstone::EngineStats& s) {
     return py::dict("cycles"_a = s.cycles, "overruns"_a = s.overruns, "repeated_reads"_a = s.repeated_reads,
                     "guard_rejects"_a = s.guard_rejects, "guard_clamps"_a = s.guard_clamps,
                     "held_cycles"_a = s.held_cycles, "stale_cycles"_a = s.stale_cycles,
-                    "resyncs"_a = s.resyncs, "failed_cycles"_a = s.failed_cycles, "time"_a = s.time,
+                    "resyncs"_a = s.resyncs, "attaches"_a = s.attaches, "failed_cycles"_a = s.failed_cycles, "time"_a = s.time,
                     "last_cycle_s"_a = s.last_cycle_s, "max_cycle_s"_a = s.max_cycle_s,
                     "max_lateness_s"_a = s.max_lateness_s, "cycle_p50_s"_a = s.cycle_hist.quantile(0.5),
                     "cycle_p99_s"_a = s.cycle_hist.quantile(0.99),
@@ -541,9 +541,12 @@ py::dict snapshot_dict(const PyEngine& e, const kstone::EngineSnapshot& s) {
     py::list res;
     for (const kstone::TaskResidual& t : s.residuals)
         res.append(py::dict("name"_a = t.name, "level"_a = t.level, "residual"_a = t.residual));
+    py::list groups;
+    for (const kstone::FeedbackGroupSnapshot& g : s.groups)
+        groups.append(py::dict("name"_a = g.name, "fresh"_a = g.fresh, "attached"_a = g.attached));
     return py::dict(
         "schema_version"_a = s.schema_version, "stats"_a = stats_dict(s.stats), "paused"_a = s.paused,
-        "fresh"_a = s.fresh, "written"_a = s.written,
+        "fresh"_a = s.fresh, "attached"_a = s.attached, "groups"_a = groups, "written"_a = s.written,
         "state"_a = py::dict("q"_a = s.state.q, "v"_a = s.state.v, "stamp_ns"_a = s.state.stamp_ns),
         "command"_a = py::dict("q"_a = s.command.q, "v"_a = s.command.v, "fresh"_a = s.command.fresh),
         "ideal"_a = s.ideal, "measured"_a = s.has_measured ? py::cast(s.measured) : py::none(),
@@ -714,23 +717,34 @@ Returns:
     'orientation': [w, x, y, z]}.)doc")
         .def(
             "write_port",
-            [](const PyModule& s, const std::string& name, py::handle value) {
+            [](const PyModule& s, const std::string& name, py::handle value,
+               std::optional<std::vector<std::string>> labels) {
                 s.owner->idle();
                 const std::size_t i = s.port(name);
+                if (labels) {
+                    const auto values = py::cast<std::vector<double>>(value);
+                    check(s.module->write_port(
+                        i, *labels,
+                        Eigen::Map<const Eigen::VectorXd>(values.data(), static_cast<Eigen::Index>(values.size()))));
+                    return;
+                }
                 kstone::PortValue decoded;
                 decode(s.module->ports()[i], value, decoded);
                 check(s.module->write_port(i, decoded));
             },
-            "name"_a, "value"_a,
+            "name"_a, "value"_a, "labels"_a = py::none(),
             R"doc(Set an input port; the module uses it from the next step.
 
 Args:
     name: Port name; see ports.
     value: A float, bool or sequence of the port's size. A pose takes a 4x4
         matrix or {'position': [x, y, z], 'orientation': [w, x, y, z]}.
+    labels: For a vector port, write only these elements (names from the
+        port's labels), one value each; the others keep their value.
 
 Example:
-    engine.module("arm").write_port("target", [0.5, 0.0, 0.0]))doc")
+    engine.module("arm").write_port("target", [0.5, 0.0, 0.0])
+    engine.module("arm").write_port("target", [0.2], labels=["elbow"]))doc")
         .def(
             "home",
             [](const PyModule& s) {
@@ -861,6 +875,15 @@ Args:
             "feedback_joints", [](const PyEngine& e) { return e.engine.options().feedback_joints; },
             "Joints whose measured position feeds back into the solve.")
         .def_property_readonly(
+            "feedback_groups",
+            [](const PyEngine& e) {
+                py::list out;
+                for (const kstone::FeedbackGroup& g : e.engine.options().feedback_groups)
+                    out.append(py::dict("name"_a = g.name, "joints"_a = g.joints));
+                return out;
+            },
+            "Configured feedback groups: [{name, joints}].")
+        .def_property_readonly(
             "safety",
             [](const PyEngine& e) {
                 const kstone::CommandGuardOptions& g = e.engine.options().safety;
@@ -979,6 +1002,24 @@ Example:
                 return e.engine.fresh();
             },
             "False when robot feedback is older than feedback_timeout_s.")
+        .def_property_readonly(
+            "attached",
+            [](const PyEngine& e) {
+                e.idle();
+                return e.engine.attached();
+            },
+            "True once feedback stayed fresh for feedback_timeout_s, synced every cycle; forward to hardware only then.")
+        .def_property_readonly(
+            "groups",
+            [](const PyEngine& e) {
+                e.idle();
+                py::list out;
+                for (std::size_t i = 0; i < e.engine.group_count(); ++i)
+                    out.append(py::dict("name"_a = e.engine.group_name(i), "fresh"_a = e.engine.group_fresh(i),
+                                        "attached"_a = e.engine.group_attached(i)));
+                return out;
+            },
+            "Feedback groups, configured ones then 'default': [{name, fresh, attached}]; attached is per group.")
         .def_property_readonly(
             "written",
             [](const PyEngine& e) {

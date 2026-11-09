@@ -18,6 +18,7 @@
 #include <sys/wait.h>
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -144,6 +145,7 @@ TEST_CASE("engine: all-continuous arm crosses +-pi on the short arc") {
     auto doc = parse_yaml(R"(
 model: {file: continuous_arm.urdf}
 rate_hz: 100
+feedback_timeout_s: 0
 robot: {type: loopback}
 modules:
   tool:
@@ -253,6 +255,7 @@ TEST_CASE("engine: revolute joint limited beyond +-pi moves multi-turn without w
     auto doc = parse_yaml(R"(
 model: {file: multiturn_joint.urdf}
 rate_hz: 100
+feedback_timeout_s: 0
 robot: {type: loopback}
 modules:
   joint: {type: joint_target, joints: [m1]}
@@ -586,6 +589,26 @@ TEST_CASE("engine: robot errors abort the cycle without writing") {
     CHECK(bad.error().message.find("nq=3") != std::string::npos);
 }
 
+TEST_CASE("engine: the chassis odometry timeout follows feedback_timeout_s") {
+    ModelOptions free;
+    free.root = RootJoint::free_flyer;
+    auto model = Model::load(ModelSource::file((kFixtures / "diff_chassis.urdf").string()), free,
+                             Context::defaults());
+    REQUIRE(model);
+    auto set = ModuleSet::create(*model);
+    REQUIRE(set);
+    ChassisModuleConfig cc;
+    cc.period_s = 0.01;
+    auto ch = std::make_shared<ChassisModule>("chassis", cc);
+    REQUIRE(set->add(ch));
+    EngineOptions options;
+    options.feedback_timeout_s = 0.4;
+    auto e = Engine::create(std::move(*set),
+                            std::make_shared<LoopbackRobot>((*model)->neutral(), (*model)->nv()), options);
+    REQUIRE_MESSAGE(e, message(e));
+    CHECK(ch->controller()->config().odom_timeout_s == 0.4);
+}
+
 TEST_CASE("engine: robot quaternions are normalized within 1e-3, rejected beyond") {
     ModelOptions free;
     free.root = RootJoint::free_flyer;
@@ -693,6 +716,7 @@ TEST_CASE("engine: failed cycles do not advance module trajectories") {
     REQUIRE(set->add(arm));
     auto robot = std::make_shared<FlakyRobot>((*model)->neutral(), (*model)->nv());
     EngineOptions options;
+    options.feedback_timeout_s = 0.0;  // steps use virtual time; attach timing would follow the wall clock
     auto e = Engine::create(std::move(*set), robot, options);
     REQUIRE_MESSAGE(e, message(e));
     REQUIRE(arm->set_target(Eigen::Vector3d::Constant(1.0)));
@@ -720,15 +744,22 @@ class StampedRobot final : public RobotInterface {
     Status read(RobotState& state) override {
         if (auto s = inner_.read(state); !s) return s;
         state.stamp_ns = stamp_ns;
+        if (group_stamps.empty())
+            std::fill(state.group_stamps_ns.begin(), state.group_stamps_ns.end(), stamp_ns);
+        else
+            state.group_stamps_ns = group_stamps;
         if (offset.size() == state.q.size()) state.q += offset;
         return {};
     }
     Status write(const RobotCommand& command) override {
         ++writes;
         last_fresh = command.fresh;
+        last_groups = command.group_attached;
         return inner_.write(command);
     }
     std::int64_t stamp_ns{-1};
+    std::vector<std::int64_t> group_stamps;  ///< Per feedback group when set; else every group gets stamp_ns.
+    std::vector<std::uint8_t> last_groups;
     int writes{0};
     bool last_fresh{false};
     Eigen::VectorXd offset;  ///< Added to the reported q (simulated drift).
@@ -743,7 +774,8 @@ struct StampedFixture {
     Engine engine;
 };
 
-StampedFixture make_stamped(double feedback_timeout_s, std::vector<std::string> feedback_joints = {}) {
+StampedFixture make_stamped(double feedback_timeout_s, std::vector<std::string> feedback_joints = {},
+                            bool stamped = true, std::vector<FeedbackGroup> groups = {}) {
     auto model = Model::load(ModelSource::file((kFixtures / "arm.urdf").string()), {}, Context::defaults());
     REQUIRE(model);
     auto set = ModuleSet::create(*model);
@@ -751,14 +783,17 @@ StampedFixture make_stamped(double feedback_timeout_s, std::vector<std::string> 
     JointTargetModuleConfig jc;
     jc.joints = {"j1", "j2", "j3"};
     REQUIRE(set->add(std::make_shared<JointTargetModule>("arm", jc)));
+    jc.joints = {"j4"};
+    REQUIRE(set->add(std::make_shared<JointTargetModule>("wrist", jc)));
     auto clock = std::make_shared<ManualClock>(1'000'000'000);
     auto robot = std::make_shared<StampedRobot>((*model)->neutral(), (*model)->nv());
-    robot->stamp_ns = clock->now_ns();
+    robot->stamp_ns = stamped ? clock->now_ns() : -1;
     Context context = Context::defaults();
     context.clock = clock;
     EngineOptions options;
     options.feedback_timeout_s = feedback_timeout_s;
     options.feedback_joints = std::move(feedback_joints);
+    options.feedback_groups = std::move(groups);
     auto e = Engine::create(std::move(*set), robot, options, context);
     REQUIRE_MESSAGE(e, message(e));
     return {clock, robot, std::move(*e)};
@@ -770,31 +805,42 @@ TEST_CASE("engine: stale or unstamped feedback still writes, flagged not fresh")
     StampedFixture f = make_stamped(0.05);
     REQUIRE(f.engine.step(0.01));
     CHECK(f.robot->writes == 1);
-    CHECK(f.robot->last_fresh);
     CHECK(f.engine.fresh());
+    CHECK_FALSE(f.robot->last_fresh);
+    CHECK(f.engine.measured() == nullptr);
+
+    f.clock->advance_ns(50'000'000);
+    f.robot->stamp_ns = f.clock->now_ns();
+    REQUIRE(f.engine.step(0.02));
+    CHECK(f.robot->last_fresh);
     CHECK(f.engine.measured() != nullptr);
 
     f.clock->advance_ns(60'000'000);
-    REQUIRE(f.engine.step(0.02));
+    REQUIRE(f.engine.step(0.03));
     CHECK(f.engine.written());
     CHECK_FALSE(f.engine.fresh());
     CHECK_FALSE(f.engine.command().fresh);
     CHECK_FALSE(f.robot->last_fresh);
     CHECK(f.engine.measured() == nullptr);
-    CHECK(f.robot->writes == 2);
+    CHECK(f.robot->writes == 3);
     CHECK(f.engine.stats().stale_cycles == 1);
 
     f.robot->stamp_ns = -1;
-    REQUIRE(f.engine.step(0.03));
-    CHECK(f.robot->writes == 3);
+    REQUIRE(f.engine.step(0.04));
+    CHECK(f.robot->writes == 4);
     CHECK_FALSE(f.robot->last_fresh);
     CHECK(f.engine.stats().stale_cycles == 2);
 
+    // Fresh again, but not flagged fresh until feedback has stayed fresh for the whole timeout.
     f.robot->stamp_ns = f.clock->now_ns() - 10'000'000;
-    REQUIRE(f.engine.step(0.04));
-    CHECK(f.robot->writes == 4);
-    CHECK(f.robot->last_fresh);
+    REQUIRE(f.engine.step(0.05));
+    CHECK(f.robot->writes == 5);
     CHECK(f.engine.fresh());
+    CHECK_FALSE(f.robot->last_fresh);
+    f.clock->advance_ns(50'000'000);
+    f.robot->stamp_ns = f.clock->now_ns();
+    REQUIRE(f.engine.step(0.06));
+    CHECK(f.robot->last_fresh);
 }
 
 namespace {
@@ -804,43 +850,260 @@ Eigen::Index iq(const Engine& e, const char* joint) {
 }
 }  // namespace
 
-TEST_CASE("engine: stale recovery keeps the commanded state, a resume while stale waits for fresh feedback") {
+TEST_CASE("engine: stale feedback detaches, reattaching holds then syncs again after the timeout") {
     StampedFixture f = make_stamped(0.05);
     auto arm = std::dynamic_pointer_cast<JointTargetModule>(f.engine.modules().module("arm"));
     REQUIRE(arm);
     Eigen::VectorXd target(3);
     target << 1.0, 0.0, 0.0;
     REQUIRE(arm->set_target(target));
+    CHECK_FALSE(f.engine.attached());
     for (int k = 1; k <= 5; ++k) REQUIRE(f.engine.step(0.01 * k));
+    CHECK_FALSE(f.engine.attached());
+    CHECK(f.engine.stats().attaches == 0);
+    f.clock->advance_ns(50'000'000);
+    f.robot->stamp_ns = f.clock->now_ns();
+    REQUIRE(f.engine.step(0.06));
+    CHECK(f.engine.attached());
+    CHECK(f.engine.stats().attaches == 1);
+    CHECK(arm->target()[0] == doctest::Approx(1.0));
     const auto resyncs = f.engine.stats().resyncs;
 
     f.clock->advance_ns(60'000'000);
-    for (int k = 6; k <= 10; ++k) REQUIRE(f.engine.step(0.01 * k));
+    for (int k = 7; k <= 11; ++k) REQUIRE(f.engine.step(0.01 * k));
     CHECK(f.engine.stats().stale_cycles == 5);
+    CHECK_FALSE(f.engine.attached());
+    CHECK(f.engine.written());
 
-    // The robot drifted while stale; recovery does not resync, the solve continues from the commanded state.
+    // The robot drifted while stale; the first fresh cycle holds where it is and drops the earlier target.
     const Eigen::Index j1 = iq(f.engine, "j1"), j2 = iq(f.engine, "j2");
     f.robot->offset = Eigen::VectorXd::Zero(f.engine.state().q.size());
     f.robot->offset[j2] = 0.2;
-    const Eigen::VectorXd before = f.engine.ideal();
     f.robot->stamp_ns = f.clock->now_ns();
-    REQUIRE(f.engine.step(0.11));
-    CHECK(f.engine.fresh());
-    CHECK(f.engine.stats().resyncs == resyncs);
-    CHECK(arm->target()[0] == doctest::Approx(1.0));
-    CHECK(f.engine.ideal()[j2] == doctest::Approx(before[j2]));
-    CHECK(f.engine.ideal()[j1] > before[j1]);
-
-    f.engine.set_paused(true);
     REQUIRE(f.engine.step(0.12));
-    f.clock->advance_ns(60'000'000);
-    f.engine.set_paused(false);
-    REQUIRE(f.engine.step(0.13));
-    CHECK(f.engine.stats().resyncs == resyncs);
-    f.robot->stamp_ns = f.clock->now_ns();
-    REQUIRE(f.engine.step(0.14));
+    CHECK(f.engine.fresh());
+    CHECK_FALSE(f.engine.attached());
+    CHECK_FALSE(f.engine.command().fresh);
+    CHECK(f.engine.measured() == nullptr);
     CHECK(f.engine.stats().resyncs == resyncs + 1);
-    CHECK(f.engine.ideal()[j2] == doctest::Approx(f.engine.state().q[j2]).epsilon(0.05));
+    const Eigen::VectorXd held = f.engine.state().q;
+    CHECK(arm->target()[0] == doctest::Approx(held[j1]));
+    CHECK(f.engine.ideal()[j1] == doctest::Approx(held[j1]));
+    CHECK(f.engine.ideal()[j2] == doctest::Approx(held[j2]));
+
+    // Every fresh cycle within the window syncs to the latest measurement; a target set meanwhile is kept.
+    REQUIRE(arm->set_target(target));
+    f.robot->offset[j2] = 0.1;
+    f.clock->advance_ns(20'000'000);
+    f.robot->stamp_ns = f.clock->now_ns();
+    Eigen::VectorXd sent = f.engine.command().q;
+    REQUIRE(f.engine.step(0.125));
+    CHECK_FALSE(f.engine.attached());
+    CHECK_FALSE(f.engine.command().fresh);
+    CHECK(f.engine.stats().resyncs == resyncs + 1);
+    CHECK(f.engine.state().q[j2] - sent[j2] == doctest::Approx(0.1));
+    CHECK(std::abs(f.engine.command().q[j2] - f.engine.state().q[j2]) < 0.05);
+
+    f.robot->offset[j2] = 0.3;
+    f.clock->advance_ns(30'000'000);
+    f.robot->stamp_ns = f.clock->now_ns();
+    sent = f.engine.command().q;
+    REQUIRE(f.engine.step(0.13));
+    CHECK(f.engine.attached());
+    CHECK(f.engine.command().fresh);
+    CHECK(f.engine.stats().attaches == 2);
+    CHECK(f.engine.stats().resyncs == resyncs + 1);
+    const Eigen::VectorXd latest = f.engine.state().q;
+    CHECK(latest[j2] - sent[j2] == doctest::Approx(0.3));
+    CHECK(std::abs(f.engine.command().q[j2] - latest[j2]) < 0.05);
+    CHECK(f.engine.ideal()[j1] > latest[j1]);
+    f.robot->offset.setZero();
+
+    // Paused cycles detach on stale feedback and never sync; the first unpaused settled cycle holds and
+    // attaches with a single sync.
+    f.engine.set_paused(true);
+    f.clock->advance_ns(60'000'000);
+    REQUIRE(f.engine.step(0.14));
+    CHECK_FALSE(f.engine.attached());
+    f.robot->stamp_ns = f.clock->now_ns();
+    REQUIRE(f.engine.step(0.15));
+    f.clock->advance_ns(50'000'000);
+    f.robot->stamp_ns = f.clock->now_ns();
+    REQUIRE(f.engine.step(0.16));
+    CHECK_FALSE(f.engine.attached());
+    f.engine.set_paused(false);
+    REQUIRE(f.engine.step(0.17));
+    CHECK(f.engine.attached());
+    CHECK(f.engine.stats().attaches == 3);
+    CHECK(f.engine.stats().resyncs == resyncs + 2);
+}
+
+TEST_CASE("resolve_feedback_groups: configured groups first, then default, mimics follow their leader") {
+    auto model = Model::load(ModelSource::file((kFixtures / "arm.urdf").string()), {}, Context::defaults());
+    REQUIRE(model);
+    const Model& m = **model;
+    const auto group_of = [&](const FeedbackLayout& l, const char* joint) { return l.joint_group[*m.joint_id(joint)]; };
+
+    auto none = resolve_feedback_groups(m, {});
+    REQUIRE(none);
+    CHECK(none->names == std::vector<std::string>{"default"});
+    CHECK(group_of(*none, "j3") == 0);
+    CHECK(group_of(*none, "universe") == 1);
+
+    auto two = resolve_feedback_groups(m, {{"hand", {"finger_left_joint"}}, {"base", {"j[12]"}}});
+    REQUIRE(two);
+    CHECK(two->names == std::vector<std::string>{"hand", "base", "default"});
+    CHECK(group_of(*two, "finger_left_joint") == 0);
+    CHECK(group_of(*two, "finger_right_joint") == 0);
+    CHECK(group_of(*two, "j2") == 1);
+    CHECK(group_of(*two, "j4") == 2);
+
+    auto all = resolve_feedback_groups(m, {{"all", {"*"}}});
+    REQUIRE(all);
+    CHECK(all->names == std::vector<std::string>{"all"});
+
+    const auto fails = [&](std::vector<FeedbackGroup> groups, const std::string& text) {
+        auto r = resolve_feedback_groups(m, groups);
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == ErrorCode::invalid_argument);
+        CHECK_MESSAGE(r.error().message.find(text) != std::string::npos, r.error().message);
+    };
+    fails({{"", {"j1"}}}, "name is empty");
+    fails({{"default", {"j1"}}}, "'default' is reserved");
+    fails({{"a", {"j1"}}, {"a", {"j2"}}}, "declared twice");
+    fails({{"a", {}}}, "has no joints");
+    fails({{"a", {"nope*"}}}, "matches no joint");
+    fails({{"a", {"finger_right_joint"}}}, "mimic follower");
+    fails({{"a", {"j1"}}, {"b", {"j*"}}}, "is in feedback groups 'a' and 'b'");
+}
+
+TEST_CASE("engine: feedback groups attach on their own and a stale group detaches only itself") {
+    StampedFixture f = make_stamped(0.05, {}, false, {{"wrist", {"j4"}}});
+    Engine& e = f.engine;
+    REQUIRE(e.group_count() == 2);
+    CHECK(e.group_name(0) == "wrist");
+    CHECK(e.group_name(1) == "default");
+    CHECK(e.group_name(2).empty());
+    auto arm = std::dynamic_pointer_cast<JointTargetModule>(e.modules().module("arm"));
+    auto wrist = std::dynamic_pointer_cast<JointTargetModule>(e.modules().module("wrist"));
+    REQUIRE(arm);
+    REQUIRE(wrist);
+
+    // Only the default group falls back to RobotState::stamp_ns; an unstamped configured group stays stale.
+    const auto stamp = [&](bool wrist_fresh) {
+        f.robot->stamp_ns = f.clock->now_ns();
+        f.robot->group_stamps = {wrist_fresh ? f.clock->now_ns() : -1, -1};
+    };
+    stamp(false);
+    REQUIRE(e.step(0.01));
+    CHECK_FALSE(e.group_fresh(0));
+    CHECK(e.group_fresh(1));
+    CHECK_FALSE(e.fresh());
+    f.clock->advance_ns(50'000'000);
+    stamp(false);
+    REQUIRE(e.step(0.02));
+    CHECK_FALSE(e.group_attached(0));
+    CHECK(e.group_attached(1));
+    CHECK_FALSE(e.attached());
+    CHECK(e.measured() != nullptr);
+    CHECK(e.stats().attaches == 1);
+    CHECK(f.robot->last_groups == std::vector<std::uint8_t>{0, 1});
+    CHECK_FALSE(f.robot->last_fresh);
+
+    Eigen::VectorXd target(3);
+    target << 1.0, 0.0, 0.0;
+    REQUIRE(arm->set_target(target));
+    REQUIRE(wrist->set_target(Eigen::VectorXd::Constant(1, 0.08)));
+
+    // The wrist turns fresh away from where it was commanded: its sync drops only the wrist target.
+    const Eigen::Index j4 = iq(e, "j4"), j1 = iq(e, "j1");
+    f.robot->offset = Eigen::VectorXd::Zero(e.state().q.size());
+    f.robot->offset[j4] = 0.05;
+    stamp(true);
+    REQUIRE(e.step(0.03));
+    CHECK(e.group_fresh(0));
+    CHECK_FALSE(e.group_attached(0));
+    CHECK(wrist->target()[0] == doctest::Approx(e.state().q[j4]));
+    CHECK(arm->target()[0] == doctest::Approx(1.0));
+    CHECK(e.ideal()[j4] == doctest::Approx(e.state().q[j4]));
+    CHECK(e.ideal()[j1] > 0.0);
+    f.robot->offset.setZero();
+    f.clock->advance_ns(50'000'000);
+    stamp(true);
+    REQUIRE(e.step(0.04));
+    CHECK(e.attached());
+    CHECK(e.command().fresh);
+    CHECK(e.stats().attaches == 2);
+    CHECK(f.robot->last_groups == std::vector<std::uint8_t>{1, 1});
+
+    const auto stale = e.stats().stale_cycles;
+    f.clock->advance_ns(10'000'000);
+    stamp(false);
+    REQUIRE(e.step(0.05));
+    CHECK_FALSE(e.group_attached(0));
+    CHECK(e.group_attached(1));
+    CHECK_FALSE(e.command().fresh);
+    CHECK(f.robot->last_groups == std::vector<std::uint8_t>{0, 1});
+    CHECK(e.stats().stale_cycles == stale + 1);
+}
+
+TEST_CASE("engine: a driver that resizes group_stamps_ns fails the cycle") {
+    StampedFixture f = make_stamped(0.0, {}, true, {{"wrist", {"j4"}}});
+    f.robot->group_stamps = {f.clock->now_ns()};
+    auto s = f.engine.step(0.01);
+    REQUIRE_FALSE(s);
+    CHECK(s.error().message.find("resized group_stamps_ns") != std::string::npos);
+}
+
+TEST_CASE("engine: a stale or unstamped state at create starts detached") {
+    StampedFixture f = make_stamped(0.05, {}, false);
+    CHECK_FALSE(f.engine.attached());
+    auto arm = std::dynamic_pointer_cast<JointTargetModule>(f.engine.modules().module("arm"));
+    REQUIRE(arm);
+    Eigen::VectorXd target(3);
+    target << 1.0, 0.0, 0.0;
+    REQUIRE(arm->set_target(target));
+    REQUIRE(f.engine.step(0.01));
+    CHECK_FALSE(f.engine.attached());
+    CHECK_FALSE(f.robot->last_fresh);
+
+    const Eigen::Index j1 = iq(f.engine, "j1");
+    f.robot->offset = Eigen::VectorXd::Zero(f.engine.state().q.size());
+    f.robot->offset[j1] = 0.3;
+    f.robot->stamp_ns = f.clock->now_ns();
+    REQUIRE(f.engine.step(0.02));
+    CHECK_FALSE(f.engine.attached());
+    CHECK(arm->target()[0] == doctest::Approx(f.engine.state().q[j1]));
+    CHECK(f.engine.command().q[j1] == doctest::Approx(f.engine.state().q[j1]));
+    f.robot->offset.setZero();
+
+    // A stale read within the window restarts it.
+    f.clock->advance_ns(30'000'000);
+    f.robot->stamp_ns = f.clock->now_ns();
+    REQUIRE(f.engine.step(0.03));
+    CHECK_FALSE(f.engine.attached());
+    f.robot->stamp_ns = -1;
+    REQUIRE(f.engine.step(0.04));
+    f.robot->stamp_ns = f.clock->now_ns();
+    REQUIRE(f.engine.step(0.05));
+    f.clock->advance_ns(30'000'000);
+    f.robot->stamp_ns = f.clock->now_ns();
+    REQUIRE(f.engine.step(0.06));
+    CHECK_FALSE(f.engine.attached());
+    CHECK_FALSE(f.robot->last_fresh);
+    f.clock->advance_ns(20'000'000);
+    f.robot->stamp_ns = f.clock->now_ns();
+    REQUIRE(f.engine.step(0.07));
+    CHECK(f.engine.attached());
+    CHECK(f.robot->last_fresh);
+    CHECK(f.engine.stats().attaches == 1);
+    CHECK(f.engine.command().q[j1] == doctest::Approx(f.engine.state().q[j1]));
+
+    StampedFixture always = make_stamped(0.0, {}, false);
+    CHECK(always.engine.attached());
+    REQUIRE(always.engine.step(0.01));
+    CHECK(always.robot->last_fresh);
+    CHECK(always.engine.stats().attaches == 0);
 }
 
 TEST_CASE("engine: feedback_joints selects the joints whose error is estimated") {
@@ -965,6 +1228,7 @@ TEST_CASE("engine: instances sharing a model run independently on separate threa
         REQUIRE(set);
         REQUIRE(ModuleRegistry::with_builtins().populate(*set, *modules, context));
         EngineOptions options;
+        options.feedback_timeout_s = 0.0;  // attach timing would follow the wall clock
         auto e = Engine::create(std::move(*set),
                                 std::make_shared<LoopbackRobot>((*model)->neutral(), (*model)->nv()), options,
                                 context);
@@ -1016,6 +1280,22 @@ TEST_CASE("engine: configuration errors carry location and path") {
 
     m = build_error("model: {file: arm.urdf}\nrate_hz: 0\n");
     CHECK_MESSAGE(m.find("t.yaml:2:10: rate_hz: must be > 0") == 0, m);
+
+    {
+        auto doc = parse_yaml("model: {file: arm.urdf}\nfeedback_timeout_s: 0\n"
+                              "feedback_groups: [{name: wrist, joints: [j4]}]\n",
+                              "t.yaml");
+        REQUIRE(doc);
+        auto e = build_engine(*doc, kFixtures);
+        REQUIRE_MESSAGE(e, message(e));
+        REQUIRE(e->options().feedback_groups.size() == 1);
+        CHECK(e->options().feedback_groups[0].joints == std::vector<std::string>{"j4"});
+        CHECK(e->group_count() == 2);
+    }
+    m = build_error("model: {file: arm.urdf}\nfeedback_groups: [{name: wrist}]\n");
+    CHECK_MESSAGE(m.find("joints") != std::string::npos, m);
+    m = build_error("model: {file: arm.urdf}\nfeedback_groups: [{name: default, joints: [j4]}]\n");
+    CHECK_MESSAGE(m.find("'default' is reserved") != std::string::npos, m);
 
     m = build_error("model: {file: arm.urdf}\nrate: 100\n");
     CHECK_MESSAGE(m.find("rate: unknown key") != std::string::npos, m);
@@ -1189,6 +1469,7 @@ TEST_CASE("engine: model.joint_limits replaces the loaded model limits") {
 TEST_CASE("engine: model.locked_joints holds joints at their initial value") {
     auto doc = parse_yaml(
         "model: {file: arm.urdf, locked_joints: [j2, finger_left_joint]}\n"
+        "feedback_timeout_s: 0\n"
         "robot: {initial: {j2: 0.2, finger_left_joint: 0.01}}\n"
         "modules:\n  arm: {type: joint_target, joints: [j1, j2, j3]}\n",
         "t.yaml");

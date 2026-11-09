@@ -263,6 +263,78 @@ Status elevate_thread_limits(const ThreadOptions& thread, const Logger& log) {
 #endif
 }
 
+Result<FeedbackLayout> resolve_feedback_groups(const Model& model, const std::vector<FeedbackGroup>& groups) {
+    const auto& joints = model.joints();
+    constexpr std::size_t none = static_cast<std::size_t>(-1);
+    std::vector<JointId> leader(joints.size());
+    for (std::size_t i = 0; i < joints.size(); ++i) leader[i] = static_cast<JointId>(i);
+    std::vector<bool> follower(joints.size(), false);
+    for (const MimicRelation& rel : model.mimics()) {
+        Result<JointId> f = model.joint_id(rel.follower);
+        Result<JointId> l = model.joint_id(rel.leader);
+        if (!f || !l) continue;
+        follower[*f] = true;
+        leader[*f] = *l;
+    }
+    const auto eligible = [&](const JointInfo& j) {
+        return j.type != JointType::universe && !follower[j.id];
+    };
+    FeedbackLayout out;
+    out.joint_group.assign(joints.size(), none);
+    for (std::size_t g = 0; g < groups.size(); ++g) {
+        const FeedbackGroup& fg = groups[g];
+        const std::string label = "engine: feedback group '" + fg.name + "'";
+        if (fg.name.empty()) return make_error(ErrorCode::invalid_argument, "engine: feedback group name is empty");
+        if (fg.name == "default")
+            return make_error(ErrorCode::invalid_argument, "engine: feedback group name 'default' is reserved");
+        if (std::find(out.names.begin(), out.names.end(), fg.name) != out.names.end())
+            return make_error(ErrorCode::invalid_argument, label + " is declared twice");
+        if (fg.joints.empty()) return make_error(ErrorCode::invalid_argument, label + " has no joints");
+        out.names.push_back(fg.name);
+        Status st;
+        const auto assign = [&](const JointInfo& j) {
+            std::size_t& slot = out.joint_group[j.id];
+            if (slot != none && slot != g && st)
+                st = make_error(ErrorCode::invalid_argument, "engine: joint '" + j.name + "' is in feedback groups '" +
+                                                                 groups[slot].name + "' and '" + fg.name + "'");
+            slot = g;
+        };
+        for (const std::string& name : fg.joints) {
+            if (Result<JointId> id = model.joint_id(name)) {
+                const JointInfo& j = joints[*id];
+                if (!eligible(j))
+                    return make_error(ErrorCode::invalid_argument,
+                                      label + ": joint '" + name + "' is the universe or a mimic follower");
+                assign(j);
+            } else {
+                bool matched = false;
+                for (const JointInfo& j : joints)
+                    if (eligible(j) && glob_match(name, j.name)) {
+                        assign(j);
+                        matched = true;
+                    }
+                if (!matched)
+                    return make_error(ErrorCode::invalid_argument, label + ": '" + name + "' matches no joint");
+            }
+            if (!st) return std::move(st).error();
+        }
+    }
+    bool ungrouped = groups.empty();
+    for (const JointInfo& j : joints)
+        if (eligible(j) && out.joint_group[j.id] == none) {
+            out.joint_group[j.id] = out.names.size();
+            ungrouped = true;
+        }
+    if (ungrouped) out.names.emplace_back("default");
+    for (const JointInfo& j : joints) {
+        if (j.type == JointType::universe)
+            out.joint_group[j.id] = out.names.size();
+        else if (follower[j.id])
+            out.joint_group[j.id] = out.joint_group[leader[j.id]];
+    }
+    return out;
+}
+
 RobotInterface::~RobotInterface() = default;
 EngineObserver::~EngineObserver() = default;
 
@@ -276,6 +348,7 @@ Status LoopbackRobot::read(RobotState& state) {
     state.q = state_.q;
     state.v = state_.v;
     state.stamp_ns = clock_->now_ns();
+    std::fill(state.group_stamps_ns.begin(), state.group_stamps_ns.end(), state.stamp_ns);
     return {};
 }
 
@@ -301,6 +374,24 @@ struct Engine::Impl {
     std::int64_t dt_ns{0};
     std::int64_t timeout_ns{0};
     std::int64_t prev_stamp_ns{-1};
+
+    struct Group {
+        std::string name;
+        std::vector<std::pair<Index, Index>> q_segments;  ///< (start, size) in q.
+        std::vector<Index> dofs;                           ///< Velocity indices.
+        Mask mask;                                         ///< Size nv.
+        bool fresh{true};
+        bool attached{false};
+        bool stale_last{false};
+        bool hold_pending{false};         ///< Targets set while stale must be dropped on the next fresh cycle.
+        bool refresh{false};              ///< estimate(): tracking error recomputed this cycle.
+        std::int64_t fresh_since_ns{-1};  ///< Clock time the group turned fresh while detached; -1 = stale.
+        std::int64_t err_stamp_ns{-1};
+    };
+    std::vector<Group> groups;
+    std::vector<std::size_t> joint_group;  ///< Per JointId.
+    std::vector<std::size_t> dof_group;    ///< Per dof.
+    bool has_default{false};               ///< The last group is "default" (falls back to RobotState::stamp_ns).
     EngineStats stats;
     RobotState state;
     RobotCommand command;
@@ -311,9 +402,9 @@ struct Engine::Impl {
     std::atomic<bool> resume_pending{false};
     std::atomic<double> pending_rate{0.0};  ///< > 0: rate_hz to switch to at the next cycle.
     double held_time{0.0};                  ///< Engine time spent paused; module time is `now` minus this.
-    bool stale_last{false};
     bool stepped{false};  ///< A cycle has succeeded; `now` must not go below stats.time after that.
-    bool fresh{true};
+    bool fresh{true};     ///< All groups.
+    bool attached{false};  ///< All groups.
     bool written{false};
 
     struct Mimic {
@@ -326,7 +417,6 @@ struct Engine::Impl {
     Eigen::VectorXd err;  ///< measured - ideal, held between feedback samples.
     Eigen::VectorXd measured_q;
     bool has_measured{false};
-    std::int64_t err_stamp_ns{-1};
 
     struct PositionLimit {
         JointId joint;
@@ -400,30 +490,97 @@ struct Engine::Impl {
         return {};
     }
 
+    Status init_groups() {
+        const auto& model = *modules.model();
+        Result<FeedbackLayout> layout = resolve_feedback_groups(model, options.feedback_groups);
+        if (!layout) return std::move(layout).error();
+        const std::size_t n = layout->names.size();
+        groups.resize(n);
+        for (std::size_t g = 0; g < n; ++g) {
+            groups[g].name = layout->names[g];
+            groups[g].mask = Mask(static_cast<std::size_t>(model.nv()));
+        }
+        has_default = n > options.feedback_groups.size();
+        joint_group = std::move(layout->joint_group);
+        dof_group.assign(static_cast<std::size_t>(model.nv()), 0);
+        for (const JointInfo& j : model.joints()) {
+            const std::size_t g = joint_group[j.id];
+            if (g >= n) continue;
+            Group& grp = groups[g];
+            if (j.nq > 0) {
+                if (!grp.q_segments.empty() &&
+                    grp.q_segments.back().first + grp.q_segments.back().second == j.idx_q)
+                    grp.q_segments.back().second += j.nq;
+                else
+                    grp.q_segments.emplace_back(j.idx_q, j.nq);
+            }
+            for (Index i = j.idx_v; i < j.idx_v + j.nv; ++i) {
+                grp.dofs.push_back(i);
+                grp.mask.set(static_cast<std::size_t>(i));
+                dof_group[static_cast<std::size_t>(i)] = g;
+            }
+        }
+        state.group_stamps_ns.assign(n, -1);
+        command.group_attached.assign(n, 0);
+        return {};
+    }
+
+    std::int64_t group_stamp(std::size_t g) const noexcept {
+        const std::int64_t s = state.group_stamps_ns[g];
+        return s < 0 && has_default && g + 1 == groups.size() ? state.stamp_ns : s;
+    }
+
     void derive_mimics(Eigen::VectorXd& q) const {
         for (const Mimic& m : mimics) q[m.follower_q] = m.multiplier * q[m.leader_q] + m.offset;
     }
 
     /// Commanded state <- measured, projected onto the model (mimics derived, scalar limits clamped).
-    void sync() {
+    void sync_all() {
         ideal_q = state.q;
         derive_mimics(ideal_q);
         for (const auto& p : position_limits) ideal_q[p.iq] = std::clamp(ideal_q[p.iq], p.lower, p.upper);
         ideal_v.setZero();
         err.setZero();
-        err_stamp_ns = -1;
+        for (Group& g : groups) g.err_stamp_ns = -1;
         modules.resynchronize(false);
-        stats.resyncs++;
     }
 
-    /// Held tracking error -> measured estimate; called on fresh feedback only.
+    /// Same for group g's joints only; resynchronizes the modules driving them (rebase: dropping held targets).
+    void sync_group(std::size_t g, bool counted, bool rebase) {
+        Group& grp = groups[g];
+        for (const auto& [start, size] : grp.q_segments) ideal_q.segment(start, size) = state.q.segment(start, size);
+        derive_mimics(ideal_q);
+        for (const auto& p : position_limits)
+            if (joint_group[p.joint] == g) ideal_q[p.iq] = std::clamp(ideal_q[p.iq], p.lower, p.upper);
+        for (const Index i : grp.dofs) ideal_v[i] = err[i] = 0.0;
+        grp.err_stamp_ns = -1;
+        if (groups.size() == 1)
+            modules.resynchronize(rebase);
+        else
+            modules.resynchronize(rebase, grp.mask);
+        if (counted) stats.resyncs++;
+    }
+
+    /// Held tracking error of the attached groups -> measured estimate.
     Status estimate() {
         const auto& model = *modules.model();
-        if (state.stamp_ns < 0 || state.stamp_ns != err_stamp_ns) {
+        bool refresh = false;
+        for (std::size_t g = 0; g < groups.size(); ++g) {
+            Group& grp = groups[g];
+            const std::int64_t stamp = group_stamp(g);
+            grp.refresh = grp.attached && (stamp < 0 || stamp != grp.err_stamp_ns);
+            refresh = refresh || grp.refresh;
+            if (grp.refresh) grp.err_stamp_ns = stamp;
+            if (!grp.attached) grp.err_stamp_ns = -1;
+        }
+        if (refresh)
             if (auto s = model.difference(ideal_q, state.q, dv); !s) return s;
-            for (Index i = 0; i < model.nv(); ++i)
+        for (Index i = 0; i < model.nv(); ++i) {
+            const Group& grp = groups[dof_group[static_cast<std::size_t>(i)]];
+            if (!grp.attached)
+                err[i] = 0.0;
+            else if (grp.refresh)
                 err[i] = feedback[static_cast<std::size_t>(i)] ? dv[i] : 0.0;
-            err_stamp_ns = state.stamp_ns;
         }
         if (auto s = model.integrate(ideal_q, err, measured_q); !s) return s;
         derive_mimics(measured_q);
@@ -521,7 +678,10 @@ struct Engine::Impl {
 
     Status read() {
         state.stamp_ns = -1;
+        std::fill(state.group_stamps_ns.begin(), state.group_stamps_ns.end(), -1);
         if (auto s = robot->read(state); !s) return s;
+        if (state.group_stamps_ns.size() != groups.size())
+            return make_error(ErrorCode::invalid_argument, "robot state: the driver resized group_stamps_ns");
         if (state.stamp_ns >= 0 && state.stamp_ns == prev_stamp_ns) stats.repeated_reads++;
         prev_stamp_ns = state.stamp_ns;
         const auto& model = *modules.model();
@@ -558,21 +718,33 @@ Result<Engine> Engine::create(ModuleSet modules, std::shared_ptr<RobotInterface>
     if (!std::isfinite(g.tolerance) || g.tolerance < 0.0)
         return make_error(ErrorCode::invalid_argument, "engine: safety.tolerance must be >= 0");
     if (auto s = validate_thread(options.thread); !s) return std::move(s).error();
-    if (!modules.configured())
+    if (!modules.configured()) {
+        if (auto s = modules.set_feedback_timeout(options.feedback_timeout_s); !s) return std::move(s).error();
         if (auto s = modules.configure(); !s) return std::move(s).error();
+    }
     auto impl = std::make_unique<Impl>(std::move(modules), std::move(robot), options, context);
     if (std::llround(1e9 / options.rate_hz) <= 0)
         return make_error(ErrorCode::invalid_argument, "engine: rate_hz is too high");
     impl->set_rate(options.rate_hz);
     impl->timeout_ns = static_cast<std::int64_t>(std::llround(options.feedback_timeout_s * 1e9));
     if (options.feedback_timeout_s > 0.0 && impl->timeout_ns <= 0) impl->timeout_ns = 1;
+    if (auto s = impl->init_groups(); !s) return std::move(s).error();
     if (auto s = impl->read(); !s) return std::move(s).error();
     impl->init_guard();
     if (auto s = impl->init_feedback(); !s) return std::move(s).error();
     impl->ideal_v = Eigen::VectorXd::Zero(impl->state.v.size());
     impl->measured_q = impl->state.q;
-    impl->sync();
-    impl->stats.resyncs = 0;
+    impl->sync_all();
+    const std::int64_t created_ns = impl->context.clock->now_ns();
+    impl->attached = true;
+    for (std::size_t i = 0; i < impl->groups.size(); ++i) {
+        Impl::Group& grp = impl->groups[i];
+        grp.attached = impl->timeout_ns <= 0;
+        const std::int64_t stamp = impl->group_stamp(i);
+        if (!grp.attached && stamp >= 0 && created_ns - stamp <= impl->timeout_ns) grp.fresh_since_ns = created_ns;
+        grp.hold_pending = !grp.attached && grp.fresh_since_ns < 0;
+        impl->attached = impl->attached && grp.attached;
+    }
     impl->result.q_next = impl->ideal_q;
     impl->result.v = impl->ideal_v;
     impl->command.q = impl->ideal_q;
@@ -603,16 +775,28 @@ Status Engine::step_impl(double now) {
     for (const auto& o : d.observers) o->before_step(*this);
     const std::int64_t start = clock.now_ns();
     if (auto s = d.read(); !s) return s;
-    const bool fresh =
-        d.timeout_ns <= 0 || (d.state.stamp_ns >= 0 && start - d.state.stamp_ns <= d.timeout_ns);
-    if (!fresh && !d.stale_last && d.context.log.enabled(LogLevel::warn))
-        d.context.log.log(LogLevel::warn, "engine",
-                          d.state.stamp_ns < 0
-                              ? "robot state has no stamp; feedback stale"
-                              : "robot state is stale (" +
-                                    std::to_string((start - d.state.stamp_ns) / 1000000) + " ms old)");
-    d.stale_last = !fresh;
-    d.fresh = fresh;
+    d.fresh = true;
+    for (Impl::Group& g : d.groups) {
+        const std::int64_t stamp = d.group_stamp(static_cast<std::size_t>(&g - d.groups.data()));
+        const bool fresh = d.timeout_ns <= 0 || (stamp >= 0 && start - stamp <= d.timeout_ns);
+        if (!fresh && !g.stale_last && d.context.log.enabled(LogLevel::warn))
+            d.context.log.log(LogLevel::warn, "engine",
+                              (d.groups.size() > 1 ? "feedback group '" + g.name + "': " : std::string()) +
+                                  (stamp < 0 ? "robot state has no stamp; feedback stale"
+                                             : "robot state is stale (" +
+                                                   std::to_string((start - stamp) / 1000000) + " ms old)"));
+        g.stale_last = !fresh;
+        g.fresh = fresh;
+        d.fresh = d.fresh && fresh;
+        if (!fresh) {
+            g.attached = false;
+            d.attached = false;
+            g.fresh_since_ns = -1;
+            g.hold_pending = true;
+        } else if (!g.attached && g.fresh_since_ns < 0) {
+            g.fresh_since_ns = start;
+        }
+    }
     d.written = false;
     d.has_measured = false;
     const bool held = d.paused.load(std::memory_order_acquire) && !d.take_pass();
@@ -620,11 +804,31 @@ Status Engine::step_impl(double now) {
         d.held_time += d.dt;
         d.stats.held_cycles++;
     } else {
-        if (fresh && d.resume_pending.exchange(false, std::memory_order_acq_rel)) d.sync();
-        if (fresh) {
-            if (auto s = d.estimate(); !s) return s;
-            d.has_measured = true;
+        const bool resume = d.resume_pending.exchange(false, std::memory_order_acq_rel);
+        for (std::size_t i = 0; i < d.groups.size(); ++i) {
+            Impl::Group& g = d.groups[i];
+            if (g.fresh && !g.attached) {
+                // Track the robot through the window; counted once per detach. Targets set before the robot
+                // state was known are dropped.
+                d.sync_group(i, g.hold_pending, g.hold_pending);
+                g.hold_pending = false;
+                // Feedback must stay fresh for a whole timeout window before the commanded state is trusted.
+                if (start - g.fresh_since_ns >= d.timeout_ns) {
+                    g.attached = true;
+                    g.fresh_since_ns = -1;
+                    d.stats.attaches++;
+                }
+            } else if (g.attached && resume) {
+                d.sync_group(i, true, false);
+            }
         }
+        d.attached = true;
+        for (const Impl::Group& g : d.groups) {
+            d.attached = d.attached && g.attached;
+            d.has_measured = d.has_measured || g.attached;
+        }
+        if (d.has_measured)
+            if (auto s = d.estimate(); !s) return s;
         // Modules have advanced from here on; a failure re-seeds them from the last written command.
         const auto fail = [&d](Status s) {
             d.modules.resynchronize(false);
@@ -643,10 +847,11 @@ Status Engine::step_impl(double now) {
         } else if (auto s = d.guard(d.result); !s) {
             return fail(std::move(s));
         }
-        d.command.fresh = fresh;
+        d.command.fresh = d.attached;
+        for (std::size_t i = 0; i < d.groups.size(); ++i) d.command.group_attached[i] = d.groups[i].attached;
         if (auto s = d.robot->write(d.command); !s) return fail(std::move(s));
         d.written = true;
-        if (!fresh) d.stats.stale_cycles++;
+        if (!d.fresh) d.stats.stale_cycles++;
         d.ideal_q = d.command.q;
         d.ideal_v = d.command.v;
     }
@@ -760,6 +965,18 @@ const SolveResult& Engine::result() const noexcept { return impl_->result; }
 const RobotCommand& Engine::command() const noexcept { return impl_->command; }
 bool Engine::written() const noexcept { return impl_->written; }
 bool Engine::fresh() const noexcept { return impl_->fresh; }
+bool Engine::attached() const noexcept { return impl_->attached; }
+std::size_t Engine::group_count() const noexcept { return impl_->groups.size(); }
+const std::string& Engine::group_name(std::size_t i) const noexcept {
+    static const std::string empty;
+    return i < impl_->groups.size() ? impl_->groups[i].name : empty;
+}
+bool Engine::group_fresh(std::size_t i) const noexcept {
+    return i < impl_->groups.size() && impl_->groups[i].fresh;
+}
+bool Engine::group_attached(std::size_t i) const noexcept {
+    return i < impl_->groups.size() && impl_->groups[i].attached;
+}
 const Eigen::VectorXd& Engine::ideal() const noexcept { return impl_->ideal_q; }
 const Eigen::VectorXd* Engine::measured() const noexcept {
     return impl_->has_measured ? &impl_->measured_q : nullptr;

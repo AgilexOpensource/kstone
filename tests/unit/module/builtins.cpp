@@ -736,6 +736,10 @@ TEST_CASE("module ports: frame_target pose and joint_target vector round-trip th
     CHECK_FALSE(jt->set_target(std::vector<std::string>{}, Eigen::VectorXd()));
     CHECK(jt->target().isApprox(Eigen::Vector2d(jp.upper[0], 0.3)));
     CHECK(jt->write_count(0) == 6);
+    REQUIRE(jt->write_port(0, std::vector<std::string>{"j3"}, Eigen::VectorXd::Constant(1, 0.1)));
+    CHECK(jt->target().isApprox(Eigen::Vector2d(jp.upper[0], 0.1)));
+    CHECK(jt->write_count(0) == 7);
+    CHECK_FALSE(jt->write_port(0, std::vector<std::string>{"j2"}, Eigen::VectorXd::Constant(1, 0.1)));
 }
 
 TEST_CASE("joint_target module: rejects non-scalar joints and missing limits") {
@@ -1152,6 +1156,57 @@ TEST_CASE("chassis module: follows the engine dt and recovers a fault on resynch
     ch->set_enabled(true);
     loop.step();
     CHECK(ch->controller()->state() == ChassisState::active);
+}
+
+TEST_CASE("chassis module: odometry timeout follows the set; the pose starts at and rebases to the root") {
+    ModelOptions o;
+    o.root = RootJoint::free_flyer;
+    ModelPtr m = load("diff_chassis.urdf", o);
+    ModuleSet set = make_set(m);
+    CHECK_FALSE(set.set_feedback_timeout(-1.0));
+    CHECK_FALSE(set.set_feedback_timeout(std::nan("")));
+    REQUIRE(set.set_feedback_timeout(0.5));
+    ChassisModuleConfig cc;
+    cc.chassis.kinematics = ChassisKinematics::differential;
+    cc.chassis.odom_timeout_s = 0.1;
+    cc.period_s = 0.02;
+    auto ch = std::make_shared<ChassisModule>("chassis", cc);
+    REQUIRE(set.add(ch));
+    REQUIRE(set.configure());
+    CHECK(ch->controller()->config().odom_timeout_s == 0.5);
+    CHECK_FALSE(set.set_feedback_timeout(0.3));
+
+    auto near = [](const Pose2D& a, const Pose2D& b) {
+        return std::abs(a.x - b.x) < 1e-9 && std::abs(a.y - b.y) < 1e-9 && std::abs(a.yaw - b.yaw) < 1e-9;
+    };
+    Eigen::VectorXd q0 = m->neutral();
+    const Pose2D initial{0.4, -0.2, 0.3};
+    REQUIRE(m->set_root_pose(q0, chassis_root_pose(initial)));
+    Loop loop{m, set, q0};
+    loop.dt = 0.02;
+    loop.step();
+    CHECK(near(ch->controller()->pose(), initial));
+
+    // Only a rebase resynchronisation covering the root adopts the measured root.
+    const Pose2D moved{1.0, 0.5, -0.2};
+    Mask root(static_cast<std::size_t>(m->nv()));
+    root.set_range(0, 6);
+    REQUIRE(m->set_root_pose(loop.q, chassis_root_pose(moved)));
+    set.resynchronize(false, root);
+    loop.step();
+    CHECK(near(ch->controller()->pose(), initial));
+    REQUIRE(m->set_root_pose(loop.q, chassis_root_pose(moved)));
+    set.resynchronize(true, Mask::from_indices(static_cast<std::size_t>(m->nv()), {6}));
+    loop.step();
+    CHECK(near(ch->controller()->pose(), initial));
+    REQUIRE(m->set_root_pose(loop.q, chassis_root_pose(moved)));
+    set.resynchronize(true, root);
+    loop.step();
+    CHECK(near(ch->controller()->pose(), moved));
+    CHECK(ch->controller()->state() == ChassisState::active);
+    auto r = m->root_pose(loop.q);
+    REQUIRE(r);
+    CHECK(r->isApprox(chassis_root_pose(moved), 1e-9));
 }
 
 TEST_CASE("chassis module: velocity port lapses and outputs follow the controller") {

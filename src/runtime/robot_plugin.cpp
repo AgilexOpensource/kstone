@@ -51,7 +51,8 @@ class PluginRobot final : public RobotInterface {
         error_[0] = '\0';
         std::int64_t stamp = -1;
         const int rc = plugin_.read(handle_, state.q.data(), size(nq_), state.v.data(), size(nv_), &stamp,
-                                    error_.data(), error_.size());
+                                    state.group_stamps_ns.data(), state.group_stamps_ns.size(), error_.data(),
+                                    error_.size());
         state.stamp_ns = stamp;
         return rc == KSTONE_ROBOT_OK ? Status{} : failure("read", rc);
     }
@@ -61,7 +62,8 @@ class PluginRobot final : public RobotInterface {
             return make_error(ErrorCode::invalid_argument, label_ + ": command size mismatch");
         error_[0] = '\0';
         const int rc = plugin_.write(handle_, command.q.data(), size(nq_), command.v.data(), size(nv_),
-                                     command.fresh ? 1 : 0, error_.data(), error_.size());
+                                     command.fresh ? 1 : 0, command.group_attached.data(),
+                                     command.group_attached.size(), error_.data(), error_.size());
         return rc == KSTONE_ROBOT_OK ? Status{} : failure("write", rc);
     }
 
@@ -130,11 +132,16 @@ Result<std::shared_ptr<RobotInterface>> load_robot_plugin(const ModelPtr& model,
                           label + ": initial has " + std::to_string(q0.size()) +
                               " values, the model has nq=" + std::to_string(m.nq()));
 
+    Result<FeedbackLayout> layout = resolve_feedback_groups(m, options.feedback_groups);
+    if (!layout) return make_error(layout.error().code, label + ": " + layout.error().message);
+    std::vector<const char*> groups;
+    for (const std::string& g : layout->names) groups.push_back(g.c_str());
     std::vector<kstone_robot_joint> joints;
     for (const JointInfo& j : m.joints()) {
         if (j.type == JointType::universe) continue;
         joints.push_back({j.name.c_str(), static_cast<std::size_t>(j.idx_q), static_cast<std::size_t>(j.nq),
-                          static_cast<std::size_t>(j.idx_v), static_cast<std::size_t>(j.nv)});
+                          static_cast<std::size_t>(j.idx_v), static_cast<std::size_t>(j.nv),
+                          layout->joint_group[j.id]});
     }
     const std::string base_dir = options.base_dir.string();
 
@@ -148,6 +155,8 @@ Result<std::shared_ptr<RobotInterface>> load_robot_plugin(const ModelPtr& model,
     config.q0 = q0.data();
     config.params_json = options.params_json.c_str();
     config.base_dir = base_dir.c_str();
+    config.groups = groups.data();
+    config.group_count = groups.size();
 
     auto robot = std::make_shared<PluginRobot>(std::move(library), plugin, label, m.nq(), m.nv());
     if (auto s = robot->create(config); !s) return std::move(s).error();

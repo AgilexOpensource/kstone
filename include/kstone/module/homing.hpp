@@ -37,7 +37,7 @@ class KSTONE_EXPORT Homing {
 
     /// No-op while active.
     void request() noexcept;
-    /// Call from every prepare(). Ends a running homing with aborted on a skipped step (module disabled),
+    /// Call from every prepare(). Ends a running homing with aborted on a skipped step or Cycle::resynced,
     /// with timed_out after timeout_s without progress. True if it ended in this call.
     bool update(const Cycle& cycle) noexcept;
     /// While executing: report the remaining error to home; `arrived` (within tolerance) always counts as progress.

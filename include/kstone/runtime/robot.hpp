@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace kstone {
 
@@ -17,14 +18,20 @@ struct RobotState {
     Eigen::VectorXd v;
     /// When the measurement was taken, in the engine Context::clock domain (ns); -1 = unknown.
     std::int64_t stamp_ns{-1};
+    /// Per feedback group (Engine::group_name order), the same kind of stamp for that group's joints. The engine
+    /// sizes it and presets every entry to -1 (unknown) before each read; the driver must not resize it. Only the
+    /// "default" group falls back to stamp_ns when its entry is -1.
+    std::vector<std::int64_t> group_stamps_ns{};
 };
 
 /// Command produced by one engine cycle: the configuration to reach after dt and the velocity to get there.
 struct RobotCommand {
     Eigen::VectorXd q;
     Eigen::VectorXd v;
-    /// false when this cycle's feedback was stale (EngineOptions::feedback_timeout_s); the driver may drop it.
+    /// Engine::attached() for this cycle; false while feedback is stale or still settling, and the driver may drop it.
     bool fresh{true};
+    /// Per feedback group (Engine::group_name order): Engine::group_attached(), 0 or 1. fresh = all of them.
+    std::vector<std::uint8_t> group_attached{};
 };
 
 /// Hardware or simulator boundary. Called from the control thread only; read/write must not allocate once
@@ -39,8 +46,8 @@ class KSTONE_EXPORT RobotInterface {
     virtual Status write(const RobotCommand& command) = 0;
 };
 
-/// Ideal robot: every command is tracked exactly, so the next read returns it, stamped with `clock`
-/// (null = steady clock, the Context::defaults() domain).
+/// Ideal robot: every command is tracked exactly, so the next read returns it, stamped (stamp_ns and every
+/// group stamp) with `clock` (null = steady clock, the Context::defaults() domain).
 class KSTONE_EXPORT LoopbackRobot final : public RobotInterface {
   public:
     LoopbackRobot(Eigen::VectorXd q, Eigen::Index nv, std::shared_ptr<const Clock> clock = nullptr);

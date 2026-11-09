@@ -51,7 +51,7 @@ struct DebugServerOptions {
 ///   params {module, values}  to every client after a successful tune, and the latest one per module right after model;
 ///   solver_params {values}  likewise after a successful tune_solver;
 ///   joint_limits {values}  likewise after a successful tune_limits;
-///   state  {time, paused, fresh, rate_hz, stats {name: value}, q (measured), q_command, modules, residuals}  per subscription
+///   state  {time, paused, fresh, attached, groups [{name, fresh, attached}] (Engine::group_count() order), rate_hz, stats {name: value}, q (measured), q_command, modules, residuals}  per subscription
 ///          (default publish_hz); each module has api_held [port names] (see api_hold_s), and its display is
 ///          null (no outputs or visuals, or not computed yet) or {at ("measured" when fresh, else "command"), outputs {name: value}, visual_poses [{position, orientation (wxyz)} or null (hidden)]},
 ///          recomputed at most at publish_hz; point = [x,y,z], segment/polygon = list of points, visuals = indices;
@@ -60,7 +60,7 @@ struct DebugServerOptions {
 ///   reply  {id, ok, code?, error?}  for every request, matched by id (order is not guaranteed).
 /// Client -> server, all {"op": ..., "id": any}:
 ///   auth {token}; ping; subscribe {rate_hz in [0, publish_hz], 0 = off};
-///   set_port {module, port, value}; set_enabled {module, enabled}; home {module};
+///   set_port {module, port, value[, labels]} (labels: only those vector elements); set_enabled {module, enabled}; home {module};
 ///   home_all: ModuleSet::home_all (homes the homeable modules currently in control).
 ///   tune {module, params (partial map, all-or-nothing)}  with optional timeout_s; tune_solver {params} likewise;
 ///          tune_limits {params} (ModuleSet::tune_joint_limits, tighten only) likewise.

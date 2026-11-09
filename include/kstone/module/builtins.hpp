@@ -190,9 +190,13 @@ class KSTONE_EXPORT JointTargetModule final : public Module {
 
   protected:
     Status on_write_port(std::size_t index, const PortValue& value) override;
+    /// Same fill semantics as the named set_target().
+    Status on_write_port_elements(std::size_t index, const std::vector<Eigen::Index>& elements,
+                                  const Eigen::Ref<const Eigen::VectorXd>& values) override;
 
   private:
     Status apply_target(const Eigen::Ref<const Eigen::VectorXd>& target);
+    Status commit_partial();
     bool holds_claim() const noexcept;
     void measure(const Cycle& cycle);
     bool arrived(const Eigen::VectorXd& goal) const;

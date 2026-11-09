@@ -2,6 +2,7 @@
 #include "kstone/runtime/engine_c.h"
 
 #include <math.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +21,7 @@ static const char* kConfig =
     "model: {file: arm.urdf}\n"
     "rate_hz: 100\n"
     "realtime: false\n"
+    "feedback_timeout_s: 0\n"
     "robot: {type: loopback}\n"
     "modules:\n"
     "  arm: {type: joint_target, joints: [j1, j2, j3]}\n"
@@ -81,6 +83,19 @@ int main(void) {
     CHECK(kstone_engine_set_port(e, "nope", "target", target, 3, err, sizeof err) == KSTONE_ENGINE_NOT_FOUND);
     CHECK(strstr(err, "nope") != NULL);
     CHECK(kstone_engine_set_port(e, "arm", "nope", target, 3, err, sizeof err) == KSTONE_ENGINE_NOT_FOUND);
+    const char* const names[2] = {"j3", "j1"};
+    const double some[2] = {0.4, -0.1};
+    CHECK(kstone_engine_set_port_labeled(e, "arm", "target", names, some, 2, err, sizeof err) ==
+          KSTONE_ENGINE_OK);
+    CHECK(kstone_engine_read_port(e, "arm", "target", got, 3, &n, err, sizeof err) == KSTONE_ENGINE_OK);
+    CHECK(got[0] == -0.1 && got[1] == -0.2 && got[2] == 0.4);
+    const char* const unknown[1] = {"j9"};
+    CHECK(kstone_engine_set_port_labeled(e, "arm", "target", unknown, some, 1, err, sizeof err) ==
+          KSTONE_ENGINE_INVALID_ARGUMENT);
+    CHECK(strstr(err, "j9") != NULL);
+    CHECK(kstone_engine_set_port_labeled(e, "arm", "target", NULL, some, 1, err, sizeof err) ==
+          KSTONE_ENGINE_INVALID_ARGUMENT);
+    CHECK(kstone_engine_set_port(e, "arm", "target", target, 3, err, sizeof err) == KSTONE_ENGINE_OK);
 
     /* Pose port: xyz + wxyz, quaternion normalized on write. */
     CHECK(kstone_engine_read_port(e, "tool", "target", NULL, 0, &n, err, sizeof err) == KSTONE_ENGINE_OK);
@@ -114,7 +129,19 @@ int main(void) {
     s.command_q = cq;
     CHECK(kstone_engine_snapshot(e, &s, err, sizeof err) == KSTONE_ENGINE_OK);
     CHECK(s.cycles == 200);
-    CHECK(s.written && s.fresh && !s.paused);
+    CHECK(s.written && s.fresh && s.attached && !s.paused && s.attaches == 0);
+    /* A caller built before attached/attaches still gets the earlier fields. */
+    s.attached = 7;
+    s.struct_size = (uint32_t)offsetof(kstone_engine_status, attached);
+    CHECK(kstone_engine_snapshot(e, &s, err, sizeof err) == KSTONE_ENGINE_OK);
+    CHECK(s.attached == 7 && s.cycles == 200);
+    s.struct_size = (uint32_t)sizeof s;
+    /* Without feedback_groups every joint is in "default". */
+    CHECK(kstone_engine_group_count(e) == 1);
+    CHECK(strcmp(kstone_engine_group_name(e, 0), "default") == 0);
+    CHECK(kstone_engine_group_fresh(e, 0) && kstone_engine_group_attached(e, 0));
+    CHECK(kstone_engine_group_name(e, 1) == NULL && !kstone_engine_group_attached(e, 1));
+    CHECK(kstone_engine_group_count(NULL) == 0 && kstone_engine_group_name(NULL, 0) == NULL);
     CHECK(fabs(s.time - 199 * 0.01) < 1e-9);
     CHECK(s.step_scale > 0.0);
     /* tool holds its pose against arm, so only the direction toward the target is checked. */

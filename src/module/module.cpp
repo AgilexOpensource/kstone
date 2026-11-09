@@ -111,6 +111,57 @@ Status Module::on_write_port(std::size_t, const PortValue&) {
     return make_error(ErrorCode::out_of_range, "module '" + id_ + "': no such port");
 }
 
+Status Module::write_port(std::size_t index, const std::vector<std::string>& labels,
+                          const Eigen::Ref<const Eigen::VectorXd>& values) {
+    if (index >= ports_.size())
+        return make_error(ErrorCode::out_of_range, "module '" + id_ + "': no such port");
+    const PortInfo& port = ports_[index];
+    elements_.clear();
+    for (const std::string& label : labels) {
+        const auto it = std::find(port.labels.begin(), port.labels.end(), label);
+        if (it == port.labels.end() || port.type != PortType::vector)
+            return make_error(ErrorCode::invalid_argument,
+                              "module '" + id_ + "': port " + port.name + " has no element " + label);
+        elements_.push_back(static_cast<Eigen::Index>(it - port.labels.begin()));
+    }
+    return write_port(index, elements_, values);
+}
+
+Status Module::write_port(std::size_t index, const std::vector<Eigen::Index>& elements,
+                          const Eigen::Ref<const Eigen::VectorXd>& values) {
+    if (index >= ports_.size())
+        return make_error(ErrorCode::out_of_range, "module '" + id_ + "': no such port");
+    const PortInfo& port = ports_[index];
+    const auto who = [&] { return "module '" + id_ + "': port " + port.name; };
+    if (port.type != PortType::vector) return make_error(ErrorCode::invalid_argument, who() + " is not a vector");
+    if (elements.empty() || static_cast<Eigen::Index>(elements.size()) != values.size())
+        return make_error(ErrorCode::invalid_argument, who() + ": need one value per element");
+    if (!values.allFinite()) return make_error(ErrorCode::invalid_argument, who() + ": non-finite value");
+    element_seen_.assign(port.labels.size(), 0);
+    for (const Eigen::Index e : elements) {
+        if (e < 0 || e >= port.size()) return make_error(ErrorCode::out_of_range, who() + ": element out of range");
+        char& seen = element_seen_[static_cast<std::size_t>(e)];
+        if (seen)
+            return make_error(ErrorCode::invalid_argument,
+                              who() + ": duplicate element " + port.labels[static_cast<std::size_t>(e)]);
+        seen = 1;
+    }
+    Status s = on_write_port_elements(index, elements, values);
+    if (s) ++write_counts_[index];
+    return s;
+}
+
+Status Module::on_write_port_elements(std::size_t index, const std::vector<Eigen::Index>& elements,
+                                      const Eigen::Ref<const Eigen::VectorXd>& values) {
+    if (Status s = read_port(index, element_value_); !s) return s;
+    if (element_value_.vector.size() != ports_[index].size())
+        return make_error(ErrorCode::internal, "module '" + id_ + "': port " + ports_[index].name +
+                                                   " read back the wrong size");
+    for (std::size_t k = 0; k < elements.size(); ++k)
+        element_value_.vector[elements[k]] = values[static_cast<Eigen::Index>(k)];
+    return on_write_port(index, element_value_);
+}
+
 bool Module::visual_placement(std::size_t i, Eigen::Isometry3d& placement) const {
     if (i >= visuals_.size()) return false;
     placement = visuals_[i].placement;
@@ -142,6 +193,7 @@ struct ModuleSetup::State {
     const Eigen::VectorXd& initial;
     const Eigen::VectorXd& lower_limit;
     const Eigen::VectorXd& upper_limit;
+    std::optional<double> feedback_timeout_s;
     Solver& solver;
     const Module& module;
     const std::string& id;
@@ -150,6 +202,7 @@ struct ModuleSetup::State {
     std::vector<std::string>& constraints;
     Mask& driven;
     Mask& locked;
+    Mask& own_locked;
 };
 
 const ModelPtr& ModuleSetup::model() const noexcept { return state_.model; }
@@ -157,6 +210,7 @@ const Context& ModuleSetup::context() const noexcept { return state_.context; }
 const Eigen::VectorXd& ModuleSetup::initial() const noexcept { return state_.initial; }
 const Eigen::VectorXd& ModuleSetup::lower_limit() const noexcept { return state_.lower_limit; }
 const Eigen::VectorXd& ModuleSetup::upper_limit() const noexcept { return state_.upper_limit; }
+std::optional<double> ModuleSetup::feedback_timeout_s() const noexcept { return state_.feedback_timeout_s; }
 
 Result<TaskHandle> ModuleSetup::add_task(const std::string& name, std::shared_ptr<Task> task,
                                          TaskOptions options) {
@@ -187,6 +241,7 @@ Status ModuleSetup::lock(const Mask& joints) {
     if (joints.size() != static_cast<std::size_t>(state_.model->nv()))
         return make_error(ErrorCode::invalid_argument, "module '" + state_.id + "': lock mask size != nv");
     merge(state_.locked, joints);
+    merge(state_.own_locked, joints);
     return {};
 }
 
@@ -198,11 +253,15 @@ struct Entry {
     std::vector<TaskOptions> task_options;
     std::vector<std::string> constraints;
     Mask driven;
+    Mask locked;  // by this module through ModuleSetup::lock
     Claim claim;
     std::uint64_t claim_since{0};
     std::uint64_t input_at{0};  // cycle + 1 of the last request_control(); 0 if none
     std::size_t order{0};
     bool claimed{false};
+    bool resync{false};  // since its last prepare(): Cycle::resynced
+    bool rebase{false};
+    std::uint64_t rebase_writes{0};  // port writes when the pending rebase was requested
     bool tasks_on{false};
     bool constraints_on{true};
 };
@@ -223,11 +282,13 @@ struct ModuleSet::Impl {
     std::vector<std::size_t> claimants;
     Mask granted, aligned;
     Eigen::VectorXd q, v, initial;
+    std::optional<double> feedback_timeout_s;
     Eigen::VectorXd lower_limit, upper_limit;  // effective, see Cycle
     std::uint64_t limits_revision{~std::uint64_t{0}};
     std::uint64_t cycle{0};
     bool resync{false};
     bool rebase{false};
+    Mask resync_dofs, rebase_dofs;
     bool configured{false};
     bool attempted{false};
 
@@ -293,6 +354,8 @@ Result<ModuleSet> ModuleSet::create(ModelPtr model, SolverOptions options, const
     const auto nv = static_cast<std::size_t>(model->nv());
     impl->granted = Mask(nv);
     impl->aligned = Mask(nv);
+    impl->resync_dofs = Mask(nv);
+    impl->rebase_dofs = Mask(nv);
     impl->q.setZero(model->nq());
     impl->v.setZero(model->nv());
     impl->initial = model->neutral();
@@ -306,6 +369,15 @@ Status ModuleSet::set_initial(const Eigen::VectorXd& q) {
         return make_error(ErrorCode::invalid_argument, "module set: initial must be finite with " +
                                                            std::to_string(impl_->model->nq()) + " values");
     impl_->initial = q;
+    return {};
+}
+
+Status ModuleSet::set_feedback_timeout(double seconds) {
+    if (impl_->attempted)
+        return make_error(ErrorCode::invalid_argument, "module set: set_feedback_timeout after configure");
+    if (!std::isfinite(seconds) || seconds < 0.0)
+        return make_error(ErrorCode::invalid_argument, "module set: feedback timeout must be finite and >= 0");
+    impl_->feedback_timeout_s = seconds;
     return {};
 }
 
@@ -368,9 +440,11 @@ Status ModuleSet::configure() {
         e.module = s.modules[i];
         e.order = sorted.size();
         e.driven = Mask(nv);
-        ModuleSetup::State state{s.model,       s.context, s.initial,      s.lower_limit, s.upper_limit,
-                                 s.solver,      *e.module, e.module->id(), e.tasks,       e.task_options,
-                                 e.constraints, e.driven,  locked};
+        e.locked = Mask(nv);
+        ModuleSetup::State state{s.model,         s.context,       s.initial,       s.lower_limit,
+                                 s.upper_limit,   s.feedback_timeout_s, s.solver,  *e.module,
+                                 e.module->id(),  e.tasks,         e.task_options,  e.constraints,
+                                 e.driven,        locked,          e.locked};
         ModuleSetup setup(state);
         if (Status st = e.module->configure(setup); !st)
             return with_context(st.error(), "module '" + e.module->id() + "'");
@@ -479,6 +553,21 @@ Status ModuleSet::step(const Eigen::Ref<const Eigen::VectorXd>& q, const Eigen::
     if (Status st = s.model->normalize(s.q); !st) return with_context(st.error(), "module set");
     s.v = v;
     if (s.resync) ++s.cycle;
+    for (Entry& e : s.entries) {
+        std::uint64_t writes = 0;
+        for (const std::uint64_t n : e.module->write_counts_) writes += n;
+        // A port write after the rebase request supersedes it.
+        if (e.rebase && writes != e.rebase_writes) e.rebase = false;
+        e.resync = e.resync || s.resync || intersects(e.driven, s.resync_dofs) || intersects(e.locked, s.resync_dofs);
+        if ((s.resync && s.rebase) || intersects(e.driven, s.rebase_dofs) || intersects(e.locked, s.rebase_dofs)) {
+            e.rebase = true;
+            e.rebase_writes = writes;
+        }
+    }
+    s.resync = false;
+    s.rebase = false;
+    s.resync_dofs.set_range(0, s.resync_dofs.size(), false);
+    s.rebase_dofs.set_range(0, s.rebase_dofs.size(), false);
     s.aligned.set_range(0, s.aligned.size(), false);
     s.sync_limits();
     Cycle cycle{now,
@@ -489,13 +578,18 @@ Status ModuleSet::step(const Eigen::Ref<const Eigen::VectorXd>& q, const Eigen::
                 s.workspace,
                 measured,
                 &s.aligned,
-                s.resync && s.rebase,
+                false,
                 &s.lower_limit,
                 &s.upper_limit,
                 s.limits_revision};
 
+    const auto view = [&cycle](const Entry& e) {
+        cycle.resynced = e.resync;
+        cycle.rebase = e.rebase;
+    };
     for (Entry& e : s.entries) {
         Module& m = *e.module;
+        view(e);
         if (m.enabled_ != e.constraints_on) {
             if (!m.enabled_)
                 if (Status st = m.on_disabled(cycle); !st)
@@ -524,6 +618,7 @@ Status ModuleSet::step(const Eigen::Ref<const Eigen::VectorXd>& q, const Eigen::
     for (Entry& e : s.entries) {
         Module& m = *e.module;
         if (!m.running_ || !m.enabled_ || m.held_by_ == nullptr) continue;
+        view(e);
         ++m.preempted_;
         if (e.claim.on_held == OnHeld::abort)
             if (Status st = m.on_preempted(cycle, *m.held_by_); !st)
@@ -532,7 +627,8 @@ Status ModuleSet::step(const Eigen::Ref<const Eigen::VectorXd>& q, const Eigen::
     for (Entry& e : s.entries) {
         Module& m = *e.module;
         const bool running = m.enabled_ && m.held_by_ == nullptr;
-        const bool resumed = running && (!m.running_ || s.resync);
+        const bool resumed = running && (!m.running_ || e.resync);
+        view(e);
         m.running_ = running;
         if (running != e.tasks_on)
             if (Status st = s.set_tasks(e, running); !st) return st;
@@ -544,9 +640,9 @@ Status ModuleSet::step(const Eigen::Ref<const Eigen::VectorXd>& q, const Eigen::
             if (m.tasks_dirty_)
                 if (Status st = s.set_tasks(e, true); !st) return st;
         }
+        // A disabled module keeps the flags until it next prepares.
+        if (m.enabled_) e.resync = e.rebase = false;
     }
-    s.resync = false;
-    s.rebase = false;
     ++s.cycle;
     return s.solver.solve(s.q, measured, dt, out);
 }
@@ -554,6 +650,12 @@ Status ModuleSet::step(const Eigen::Ref<const Eigen::VectorXd>& q, const Eigen::
 void ModuleSet::resynchronize(bool rebase) noexcept {
     impl_->resync = true;
     impl_->rebase = impl_->rebase || rebase;
+}
+
+void ModuleSet::resynchronize(bool rebase, const Mask& dofs) {
+    Impl& s = *impl_;
+    s.resync_dofs |= dofs;
+    if (rebase) s.rebase_dofs |= dofs;
 }
 
 const Mask& ModuleSet::aligned() const noexcept { return impl_->aligned; }

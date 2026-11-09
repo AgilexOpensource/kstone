@@ -573,8 +573,11 @@ TEST_CASE("alloc: engine step with a clamping guard does not allocate after warm
     EngineOptions eo;
     eo.rate_hz = 100.0;
     eo.safety.mode = GuardMode::clamp;
+    eo.feedback_timeout_s = 0.0;  // steps use virtual time; attach timing would follow the wall clock
+    eo.feedback_groups = {{"wrist", {"j4"}}};
     auto engine = Engine::create(std::move(*created), robot, eo);
     REQUIRE(engine);
+    REQUIRE(engine->group_count() == 2);
 
     Eigen::VectorXd goal = Eigen::VectorXd::Constant(1, 1.9);
     REQUIRE(arm->set_target(goal));

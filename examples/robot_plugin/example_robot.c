@@ -50,9 +50,10 @@ static void example_destroy(void* handle) {
 }
 
 static int example_read(void* handle, double* q, size_t nq, double* v, size_t nv, int64_t* stamp_ns,
-                        char* error, size_t error_size) {
+                        int64_t* group_stamps_ns, size_t group_count, char* error, size_t error_size) {
     example_robot* r = (example_robot*)handle;
     struct timespec now;
+    size_t i;
     if (nq != r->nq || nv != r->nv) {
         snprintf(error, error_size, "state size mismatch");
         return KSTONE_ROBOT_INVALID_ARGUMENT;
@@ -61,14 +62,19 @@ static int example_read(void* handle, double* q, size_t nq, double* v, size_t nv
     memcpy(v, r->v, nv * sizeof(double));
     /* A real driver stamps with the time the feedback was measured, not the time it was read. */
     if (clock_gettime(CLOCK_MONOTONIC, &now) == 0) *stamp_ns = (int64_t)now.tv_sec * 1000000000 + now.tv_nsec;
+    /* One bus here; a driver with separate feedback sources stamps each group with its own source. */
+    for (i = 0; i < group_count; ++i) group_stamps_ns[i] = *stamp_ns;
     return KSTONE_ROBOT_OK;
 }
 
 static int example_write(void* handle, const double* q, size_t nq, const double* v, size_t nv, int fresh,
-                         char* error, size_t error_size) {
+                         const uint8_t* group_attached, size_t group_count, char* error, size_t error_size) {
     example_robot* r = (example_robot*)handle;
-    (void)
-        fresh; /* Decide here whether to send commands solved without fresh feedback; this one always does. */
+    /* Decide here whether to send commands solved without fresh feedback (per group: group_attached[i]); this
+     * one always does. */
+    (void)fresh;
+    (void)group_attached;
+    (void)group_count;
     if (nq != r->nq || nv != r->nv) {
         snprintf(error, error_size, "command size mismatch");
         return KSTONE_ROBOT_INVALID_ARGUMENT;

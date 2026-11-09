@@ -45,7 +45,7 @@ void Homing::request() noexcept {
 }
 
 bool Homing::update(const Cycle& cycle) noexcept {
-    const bool skipped = prepared_ && cycle.index != last_index_ + 1;
+    const bool skipped = prepared_ && (cycle.index != last_index_ + 1 || cycle.resynced);
     last_index_ = cycle.index;
     prepared_ = true;
     if (!active()) return false;

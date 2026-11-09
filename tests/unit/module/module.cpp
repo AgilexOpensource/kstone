@@ -6,6 +6,7 @@
 #include <doctest/doctest.h>
 
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -58,9 +59,11 @@ struct Probe final : Module {
         if (fail) return make_error(ErrorCode::invalid_argument, "boom");
         return {};
     }
-    Status prepare(Cycle&) override {
+    Status prepare(Cycle& c) override {
         if (!claim_joints.empty()) claim_mask = mask_of(model, claim_joints);
         ++prepares;
+        resynced = c.resynced;
+        index = c.index;
         return {};
     }
     Claim claim() const override {
@@ -73,8 +76,9 @@ struct Probe final : Module {
         contributes_at_preempt = contributes;
         return {};
     }
-    Status reset(const Cycle&) override {
+    Status reset(const Cycle& c) override {
         ++resets;
+        rebased = c.rebase;
         return {};
     }
     Status contribute(const Cycle&) override {
@@ -82,6 +86,17 @@ struct Probe final : Module {
         set_task_active(foreign.valid() ? foreign : handle, task_on);
         return {};
     }
+    void add_port() {
+        PortInfo p;
+        p.name = "target";
+        p.type = PortType::number;
+        declare_port(std::move(p));
+    }
+
+  protected:
+    Status on_write_port(std::size_t, const PortValue&) override { return {}; }
+
+  public:
 
     ModelPtr model;
     std::vector<std::string> joints;
@@ -95,6 +110,8 @@ struct Probe final : Module {
     bool lock_joints{false};
     bool fail{false};
     bool task_on{true};
+    bool resynced{false}, rebased{false};
+    std::uint64_t index{0};
     int priority{0};
     OnHeld on_held{OnHeld::wait};
     int prepares{0}, resets{0}, contributes{0};
@@ -220,6 +237,67 @@ TEST_CASE("module set: driven overlap holds a module and resumes it with reset")
     CHECK(arm->running());
     CHECK(held(*claimer) == "arm");
     CHECK(other->running());
+}
+
+TEST_CASE("module set: a masked resynchronize resets only the modules driving those joints") {
+    Rig r;
+    auto arm = r.add(std::make_shared<Probe>("arm", std::vector<std::string>{"j1", "j2"}));
+    auto other = r.add(std::make_shared<Probe>("other", std::vector<std::string>{"j4"}));
+    REQUIRE(r.set.configure());
+    r.step();
+    r.step();
+    REQUIRE(arm->resets == 1);
+    const std::uint64_t index = arm->index;
+
+    r.set.resynchronize(true, mask_of(r.model, {"j2"}));
+    r.step();
+    CHECK(arm->index == index + 1);
+    CHECK(arm->resynced);
+    CHECK(arm->resets == 2);
+    CHECK(arm->rebased);
+    CHECK_FALSE(other->resynced);
+    CHECK(other->resets == 1);
+
+    r.set.resynchronize(false, mask_of(r.model, {"j4"}));
+    r.step();
+    CHECK_FALSE(arm->resynced);
+    CHECK(arm->resets == 2);
+    CHECK(other->resynced);
+    CHECK(other->resets == 2);
+    CHECK_FALSE(other->rebased);
+
+    r.set.resynchronize();
+    r.step();
+    CHECK(arm->index == index + 4);
+    CHECK(arm->resynced);
+    CHECK(other->resynced);
+    CHECK(arm->resets == 3);
+    CHECK(other->resets == 3);
+}
+
+TEST_CASE("module set: a disabled module keeps a pending rebase until a port write supersedes it") {
+    Rig r;
+    auto arm = r.add(std::make_shared<Probe>("arm", std::vector<std::string>{"j1"}));
+    arm->add_port();
+    REQUIRE(r.set.configure());
+    r.step();
+    arm->set_enabled(false);
+    r.set.resynchronize(true);
+    r.step();
+    arm->set_enabled(true);
+    r.step();
+    CHECK(arm->rebased);
+
+    arm->set_enabled(false);
+    r.set.resynchronize(true);
+    r.step();
+    PortValue value;
+    value.number = 0.5;
+    REQUIRE(arm->write_port(0, value));
+    arm->set_enabled(true);
+    r.step();
+    CHECK(arm->resynced);
+    CHECK_FALSE(arm->rebased);
 }
 
 TEST_CASE("module set: on_held abort calls on_preempted once per preemption, wait does not") {
@@ -427,4 +505,53 @@ TEST_CASE("module set: step normalizes a near-unit root quaternion and rejects a
     const Status s = set->step(q, v, 0.02, 0.01, out);
     REQUIRE_FALSE(s);
     CHECK(s.error().message.find("quaternion of norm 0") != std::string::npos);
+}
+
+namespace {
+struct Vec3 final : Module {
+    Eigen::Vector3d value{1.0, 2.0, 3.0};
+    Vec3() : Module("vec") {
+        PortInfo p;
+        p.name = "v";
+        p.type = PortType::vector;
+        p.labels = {"x", "y", "z"};
+        declare_port(std::move(p));
+    }
+    const char* type() const noexcept override { return "vec3"; }
+    Status configure(ModuleSetup&) override { return {}; }
+    Status read_port(std::size_t, PortValue& out) const override {
+        out.vector = value;
+        return {};
+    }
+
+  protected:
+    Status on_write_port(std::size_t, const PortValue& v) override {
+        value = v.vector;
+        return {};
+    }
+};
+}  // namespace
+
+TEST_CASE("labeled port writes overwrite only the named elements") {
+    Vec3 m;
+    REQUIRE(m.write_port(0, std::vector<std::string>{"z", "x"}, Eigen::Vector2d(-3.0, -1.0)));
+    CHECK(m.value.isApprox(Eigen::Vector3d(-1.0, 2.0, -3.0)));
+    CHECK(m.write_count(0) == 1);
+    REQUIRE(m.write_port(0, std::vector<Eigen::Index>{1}, Eigen::VectorXd::Constant(1, 5.0)));
+    CHECK(m.value.isApprox(Eigen::Vector3d(-1.0, 5.0, -3.0)));
+    CHECK(m.write_count(0) == 2);
+
+    const Eigen::Vector3d before = m.value;
+    CHECK(m.write_port(0, std::vector<std::string>{"w"}, Eigen::VectorXd::Constant(1, 0.0)).error().code ==
+          ErrorCode::invalid_argument);
+    CHECK_FALSE(m.write_port(0, std::vector<std::string>{"x", "x"}, Eigen::Vector2d(0.0, 0.0)));
+    CHECK_FALSE(m.write_port(0, std::vector<std::string>{"x"}, Eigen::Vector2d(0.0, 0.0)));
+    CHECK_FALSE(m.write_port(0, std::vector<std::string>{}, Eigen::VectorXd()));
+    CHECK_FALSE(m.write_port(0, std::vector<std::string>{"x"}, Eigen::VectorXd::Constant(1, NAN)));
+    CHECK(m.write_port(0, std::vector<Eigen::Index>{3}, Eigen::VectorXd::Constant(1, 0.0)).error().code ==
+          ErrorCode::out_of_range);
+    CHECK(m.write_port(1, std::vector<Eigen::Index>{0}, Eigen::VectorXd::Constant(1, 0.0)).error().code ==
+          ErrorCode::out_of_range);
+    CHECK(m.value == before);
+    CHECK(m.write_count(0) == 2);
 }

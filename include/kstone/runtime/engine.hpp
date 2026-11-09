@@ -52,16 +52,41 @@ struct ThreadOptions {
 /// Call before Engine::run, from a process with a terminal. Linux only; elsewhere returns unsupported.
 KSTONE_EXPORT Status elevate_thread_limits(const ThreadOptions& thread, const Logger& log);
 
+/// Joints whose feedback is stamped, checked for staleness and attached together (e.g. arms vs. an odometry base).
+struct FeedbackGroup {
+    std::string name;  ///< Unique, non-empty, not "default".
+    /// Names or fnmatch patterns ('*', '?', '[...]'), each must select a joint; a joint belongs to at most one
+    /// group. Mimic followers always join their leader's group (an exact follower name is an error).
+    std::vector<std::string> joints;
+};
+
+/// Resolved feedback groups: EngineOptions::feedback_groups in order, then "default" with every joint in no
+/// group (only when there is one; with no groups configured it holds every joint).
+struct FeedbackLayout {
+    std::vector<std::string> names;
+    /// Per JointId: index into names; names.size() for the universe joint.
+    std::vector<std::size_t> joint_group;
+};
+
+KSTONE_EXPORT Result<FeedbackLayout> resolve_feedback_groups(const Model& model,
+                                                             const std::vector<FeedbackGroup>& groups);
+
 struct EngineOptions {
     double rate_hz{100.0};
     /// Apply `thread` in run() (callers such as kstone run also call elevate_thread_limits first). run() always
     /// sleeps to each deadline of Context::clock; `now` advances by exactly 1 / rate_hz per cycle.
     bool realtime{false};
-    /// > 0: feedback with an unknown RobotState::stamp_ns or older than this (s) is stale; 0 = always fresh.
+    /// > 0: a feedback group whose stamp is unknown or older than this (s) is stale; 0 = always fresh.
     /// Default 0.25 s, so drivers must stamp their reads or set 0.
-    /// Stale feedback only drops the measured estimate (closed-loop terms use the commanded state); the command
-    /// is still written with RobotCommand::fresh = false, and the driver or caller decides whether to send it.
+    /// A stale group detaches; it reattaches once its feedback has stayed fresh for this long (see
+    /// Engine::group_attached()). While detached its tracking error leaves the measured estimate (closed-loop
+    /// terms use the commanded state there) and commands are still written with RobotCommand::fresh = false;
+    /// the driver decides whether to send them.
     double feedback_timeout_s{0.25};
+    /// Empty = one "default" group with every joint. Otherwise each group has its own stamp
+    /// (RobotState::group_stamps_ns), staleness, settle window and attached state; a stale group only detaches
+    /// and later resynchronizes its own joints and the modules driving them (see Engine::attached()).
+    std::vector<FeedbackGroup> feedback_groups;
     /// Scalar joints whose tracking error (measured - commanded) is held between samples to form the measured
     /// estimate used by closed-loop constraints and homing alignment. Names or fnmatch patterns ('*', '?',
     /// '[...]'), each must select a joint; empty = every scalar joint. Mimic followers always follow their leader.
@@ -79,8 +104,9 @@ struct EngineStats {
     std::uint64_t guard_rejects{0};   ///< Cycles failed by the command guard.
     std::uint64_t guard_clamps{0};    ///< Cycles whose command the guard clamped.
     std::uint64_t held_cycles{0};     ///< Paused cycles (no solve, no write).
-    std::uint64_t stale_cycles{0};    ///< Written cycles with stale feedback (RobotCommand::fresh = false).
-    std::uint64_t resyncs{0};         ///< Resynchronizations to the measured state (resume).
+    std::uint64_t stale_cycles{0};    ///< Written cycles with any feedback group stale.
+    std::uint64_t resyncs{0};         ///< Group resynchronizations to the measured state (resume, fresh after stale).
+    std::uint64_t attaches{0};        ///< Group attachments (Engine::group_attached()), including the first ones.
     std::uint64_t failed_cycles{0};   ///< Failed step() calls (nothing written).
     double time{0.0};                 ///< `now` of the last cycle (s).
     double last_cycle_s{0.0};         ///< Wall time of the last read-solve-write.
@@ -156,9 +182,23 @@ class KSTONE_EXPORT Engine {
     /// Last guarded command; unspecified after a failed step().
     const RobotCommand& command() const noexcept;
     bool written() const noexcept;  ///< Whether the last successful cycle wrote (false when paused).
-    bool fresh() const noexcept;    ///< Whether the last read was fresh (see feedback_timeout_s).
+    bool fresh() const noexcept;    ///< Whether every feedback group was fresh in the last read (see feedback_timeout_s).
+    /// Whether every feedback group is attached (see group_attached()).
+    bool attached() const noexcept;
+    std::size_t group_count() const noexcept;
+    /// Empty when i >= group_count().
+    const std::string& group_name(std::size_t i) const noexcept;
+    bool group_fresh(std::size_t i) const noexcept;  ///< Whether group i was fresh in the last read.
+    /// Whether group i's joints have been synced to fresh feedback and have stayed fresh since; always true
+    /// when feedback_timeout_s = 0. Starts false and turns false on a stale read of the group. The first fresh,
+    /// unpaused cycle after that rebases the modules driving the group's joints (held targets dropped); from
+    /// then on every fresh, unpaused cycle syncs those joints to the latest measurement (targets set meanwhile
+    /// kept) until the group has stayed fresh for feedback_timeout_s, when that cycle's sync attaches.
+    /// RobotCommand::group_attached and RobotCommand::fresh (all groups) follow it for every written command,
+    /// so a command built on a state measured before the window is never flagged attached.
+    bool group_attached(std::size_t i) const noexcept;
     const Eigen::VectorXd& ideal() const noexcept;  ///< Commanded state the next solve starts from.
-    /// Last measured estimate (ideal + held tracking error); nullptr while stale.
+    /// Last measured estimate (ideal + held tracking error of the attached groups); nullptr while no group is attached.
     const Eigen::VectorXd* measured() const noexcept;
     ModuleSet& modules() noexcept;
     const ModuleSet& modules() const noexcept;

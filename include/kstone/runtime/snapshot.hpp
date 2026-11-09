@@ -29,6 +29,12 @@ struct ModuleSnapshot {
     std::vector<PortValue> ports;     ///< Same order as Module::ports().
 };
 
+struct FeedbackGroupSnapshot {
+    std::string name;
+    bool fresh{false};
+    bool attached{false};
+};
+
 /// Read-only view of the last engine cycle, shared by every telemetry consumer.
 struct EngineSnapshot {
     std::uint32_t schema_version{snapshot_schema_version};
@@ -38,6 +44,7 @@ struct EngineSnapshot {
     double cycle_p999_s{0.0};
     bool paused{false};
     bool fresh{false};
+    bool attached{false};
     bool written{false};
     RobotState state;       ///< Last read.
     RobotCommand command;   ///< Last guarded command.
@@ -49,6 +56,7 @@ struct EngineSnapshot {
     double step_scale{1.0};
     std::vector<TaskResidual> residuals;
     std::vector<ModuleSnapshot> modules;
+    std::vector<FeedbackGroupSnapshot> groups;  ///< Engine::group_count() order.
 };
 
 /// Fills `out` from the engine's last cycle, reusing its buffers: no allocation once sizes and names settle.

@@ -38,7 +38,6 @@ modules:
   chassis:
     type: chassis
     chassis:
-      odom_timeout_s: 0.25
       command_timeout_s: 0.25
       kinematics: omni
       base_frame: base_link

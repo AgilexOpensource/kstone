@@ -52,6 +52,7 @@ typedef struct kstone_robot_joint {
     size_t nq;
     size_t idx_v;
     size_t nv;
+    size_t group; /* Index into kstone_robot_config.groups; mimic followers take their leader's group. */
 } kstone_robot_joint;
 
 /* Valid only during create(); copy anything the driver keeps. */
@@ -65,6 +66,8 @@ typedef struct kstone_robot_config {
     const double* q0;        /* robot.initial, or the model's neutral configuration (size nq). */
     const char* params_json; /* robot.params as a JSON object ("{}" when absent). */
     const char* base_dir;    /* Directory of the configuration file, for relative driver paths. */
+    const char* const* groups; /* Feedback group names (engine.feedback_groups, then "default" if used). */
+    size_t group_count;
 } kstone_robot_config;
 
 /* error/error_size: on failure write a NUL-terminated message (truncate to error_size). */
@@ -78,15 +81,18 @@ typedef struct kstone_robot_plugin {
     /* Called once per successful create(), also after errors; must leave the robot safe (hold or brake). */
     void (*destroy)(void* handle);
     /* Measured state. An error aborts the cycle before solving. *stamp_ns (preset to -1 = unknown) is the
-     * CLOCK_MONOTONIC time of the measurement in ns. Quaternions and continuous-joint (cos, sin) pairs are
-     * renormalized if their norm is within 1e-3 of 1, else the read fails. */
-    int (*read)(void* handle, double* q, size_t nq, double* v, size_t nv, int64_t* stamp_ns, char* error,
-                size_t error_size);
+     * CLOCK_MONOTONIC time of the measurement in ns; group_stamps_ns[i] (each preset to -1) is the same for the
+     * joints of group i, and only "default" falls back to *stamp_ns. Quaternions and continuous-joint (cos, sin)
+     * pairs are renormalized if their norm is within 1e-3 of 1, else the read fails. */
+    int (*read)(void* handle, double* q, size_t nq, double* v, size_t nv, int64_t* stamp_ns,
+                int64_t* group_stamps_ns, size_t group_count, char* error, size_t error_size);
     /* q: configuration to reach after one cycle (1 / rate_hz); v: velocity to get there. Called every cycle;
      * fresh = 0 while the feedback is stale (feedback_timeout_s; an unknown *stamp_ns counts as stale) and the
-     * driver decides whether to send such a command. */
-    int (*write)(void* handle, const double* q, size_t nq, const double* v, size_t nv, int fresh, char* error,
-                 size_t error_size);
+     * driver decides whether to send such a command; fresh = 1 also means the engine is attached (feedback fresh for
+     * feedback_timeout_s and synced every cycle of it). group_attached[i] is the same per group; fresh = all of
+     * them, so a driver may still send the joints of attached groups. */
+    int (*write)(void* handle, const double* q, size_t nq, const double* v, size_t nv, int fresh,
+                 const uint8_t* group_attached, size_t group_count, char* error, size_t error_size);
 } kstone_robot_plugin;
 
 typedef const kstone_robot_plugin* (*kstone_robot_plugin_fn)(void);

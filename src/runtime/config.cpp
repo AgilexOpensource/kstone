@@ -89,6 +89,14 @@ ParamSchema<EngineConfig> engine_schema() {
         .doc("Default 5; run stops after this many consecutive failed cycles (1 = at the first).");
     engine.field("feedback_joints", &EngineOptions::feedback_joints)
         .doc("Names or fnmatch patterns, each must select a joint; empty = every scalar joint.");
+    ParamSchema<FeedbackGroup> group("Joints whose feedback has its own stamp, freshness and attach.");
+    group.field("name", &FeedbackGroup::name).required().non_empty().doc("Unique; \"default\" is reserved.");
+    group.field("joints", &FeedbackGroup::joints)
+        .required()
+        .non_empty()
+        .doc("Names or fnmatch patterns; a joint belongs to at most one group, followers follow their leader.");
+    engine.field("feedback_groups", &EngineOptions::feedback_groups, std::move(group))
+        .doc("Ungrouped joints form the last group, \"default\", which falls back to the state stamp.");
     engine.field("safety", &EngineOptions::safety, std::move(safety));
     engine.field("thread", &EngineOptions::thread, std::move(thread));
 
@@ -441,6 +449,7 @@ Result<Engine> build_engine(const ConfigNode& config, const std::filesystem::pat
             plugin.base_dir = base_dir;
             plugin.rate_hz = cfg.engine.rate_hz;
             plugin.initial = std::move(q0);
+            plugin.feedback_groups = cfg.engine.feedback_groups;
             auto loaded = load_robot_plugin(*model, plugin);
             if (!loaded)
                 return config_error(loaded.error().code, ConfigDiag::robot_failed, robot_location("library"),
