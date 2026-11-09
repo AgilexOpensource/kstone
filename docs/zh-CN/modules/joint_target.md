@@ -10,6 +10,8 @@
 |---|---|---|
 | `target` | vector | 每个关节一个值，按 `joints` 顺序；超出位置限位的分量会被夹紧 |
 
+C++ 的 `JointTargetModule::set_target(names, values)` 只设置给出名字的关节，顺序不限；其余关节保持当前目标，模块被禁用或 held 时则保持测量位置。名字未知或重复会报错。带标签的端口写入行为相同，例如 Python `write_port("target", [0.2], labels=["elbow"])`，见[端口](README.md#端口)。
+
 ## 关键参数
 
 - `joints`：标量关节，每个 mimic 组最多一个。

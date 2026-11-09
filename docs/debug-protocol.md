@@ -27,7 +27,7 @@ The debug server (`kstone run --serve`, `Engine.serve` or `DebugServer`) speaks 
 |---|---|
 | `auth`, `ping` | Authenticate, check the connection |
 | `subscribe` | Set the `state` rate; 0 stops it |
-| `set_port`, `set_enabled`, `home` | Command a module |
+| `set_port`, `set_enabled`, `home` | Command a module; `set_port` with `labels` writes only those vector elements |
 | `home_all` | Home every homeable module currently in control (`ModuleSet::home_all`) |
 | `tune`, `tune_solver`, `tune_limits` | Change module, solver or joint limit parameters |
 | `pause`, `step`, `set_rate` | Pause the engine, step while paused, change the control rate |

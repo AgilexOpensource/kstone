@@ -23,7 +23,7 @@ solver = kstone.load_solver("tests/fixtures/arm_loopback.yaml")
 print(solver.modules)          # ['tool', 'arm', 'fingers']
 print(solver.module("arm").ports)
 
-solver.module("arm").write_port("target", [0.5, -0.3, 0.2])
+solver.module("arm").write_port("target", [0.5, -0.3, 0.2])  # labels=["j3"] writes only j3
 q = solver.initial
 for _ in range(300):
     result = solver.solve(q, 0.01)
@@ -63,9 +63,11 @@ print(engine.stats["cycles"], engine.stats["failed_cycles"])
 ```
 
 - `run()` blocks until `duration_s` passes or `stop()` is called from another thread. Without a duration it runs until stopped.
-- `run()` follows the wall clock. To advance faster than real time (tests, offline simulation), call `step()` in a loop.
+- `run()` follows the wall clock. To advance faster than real time (tests, offline simulation), call `step()` in a loop and set `feedback_timeout_s: 0`; otherwise the engine attaches only after that much wall time and modules hold until then.
 - `engine.q` is the commanded configuration and `engine.measured` the last one read from the robot.
 - `engine.snapshot()` returns everything at once as a dict.
+- `engine.fresh` tells whether the last read was fresh; `engine.attached` whether the engine has synced to fresh feedback and stayed fresh since. Forward commands to hardware only while attached. See the [run contract](robot.md#run-contract).
+- `engine.groups` lists the feedback groups as `{name, fresh, attached}` (configured ones, then `default`); `engine.feedback_groups` returns the configured groups. `snapshot()["groups"]` carries the same list.
 
 To drive real hardware, change the `robot:` section of the config. See [Robot integration](robot.md).
 
@@ -112,7 +114,7 @@ engine.tune_joint_limits({"velocity": {"j1": 0.5}})
 engine.tune_joint_limits({"reset": True})
 ```
 
-Modules can also be switched off with `module.enabled = False`.
+Modules can also be switched off with `module.enabled = False`. `engine.home_all()` homes every homeable module in control of some joints (watch `home_state`).
 
 ## Watch it in the browser
 

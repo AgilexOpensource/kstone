@@ -23,9 +23,10 @@ modules:
 | `model` | required | Robot model, see [model](#model) |
 | `rate_hz` | 100 | Control rate |
 | `realtime` | false | Apply the `thread` settings (real-time scheduling) in `run()`; `kstone run --realtime` forces it on. `run()` always paces cycles to the clock |
-| `feedback_timeout_s` | 0.25 | Feedback that is older or has no timestamp is stale; 0 = never stale. See [run contract](robot.md#run-contract) |
+| `feedback_timeout_s` | 0.25 | Feedback that is older or has no timestamp is stale; also the attach window after feedback turns fresh; 0 = never stale and attached at once. See [run contract](robot.md#run-contract) |
 | `max_failed_cycles` | 5 | `run()` returns after this many consecutive failed cycles |
 | `feedback_joints` | all scalar joints | Joints whose measured position feeds the closed-loop estimate (collision, CoM, homing). Names or fnmatch patterns |
+| `feedback_groups` | none | Joints with their own feedback stamp, freshness and attach, e.g. `[{name: base, joints: [root_joint]}]`. Names or fnmatch patterns; ungrouped joints form the last group, `default`. See [run contract](robot.md#run-contract) |
 | `safety` | | Command guard, see [safety](#safety) |
 | `solver` | | QP solver, see [solver](#solver) |
 | `robot` | loopback | Robot interface, see [robot](#robot) |

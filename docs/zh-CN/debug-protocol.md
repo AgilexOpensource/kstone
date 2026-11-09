@@ -29,7 +29,7 @@
 |---|---|
 | `auth`、`ping` | 认证、检查连接 |
 | `subscribe` | 设置 `state` 频率；0 停止 |
-| `set_port`、`set_enabled`、`home` | 控制模块 |
+| `set_port`、`set_enabled`、`home` | 控制模块；带 `labels` 的 `set_port` 只写这些 vector 元素 |
 | `home_all` | 让当前持有控制权的可回 home 模块全部回 home（`ModuleSet::home_all`） |
 | `tune`、`tune_solver`、`tune_limits` | 修改模块、求解器或关节限位参数 |
 | `pause`、`step`、`set_rate` | 暂停引擎、暂停时单步、修改控制频率 |

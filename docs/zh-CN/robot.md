@@ -17,7 +17,7 @@ kstone run <config.yaml> [--duration s] [--realtime] [--serve [host:port|port]] 
 <a id="driver-plugins"></a>
 ## 驱动插件
 
-驱动写成实现 [robot_plugin.h](../../include/kstone/runtime/robot_plugin.h) C ABI 的共享库，以 [example_robot.c](../../examples/robot_plugin/example_robot.c) 为起点。`read` 必须带 CLOCK_MONOTONIC 时间戳，否则反馈视为过期。
+驱动写成实现 [robot_plugin.h](../../include/kstone/runtime/robot_plugin.h) C ABI 的共享库，以 [example_robot.c](../../examples/robot_plugin/example_robot.c) 为起点。`read` 必须带 CLOCK_MONOTONIC 时间戳，否则反馈视为过期。配置了 `feedback_groups` 时，每个关节带有所属组的索引，`read` 还要在 `group_stamps_ns` 里给每组打时间戳（-1 表示过期；只有 `default` 组会回退到整体状态时间戳），`write` 通过 `group_attached` 收到每组的同步状态。
 
 ```bash
 cc -shared -fPIC -Iinclude examples/robot_plugin/example_robot.c -o libexample_robot.so
@@ -53,6 +53,8 @@ thread:
 
 - **周期失败。** 读、解或写出错时引擎不写命令，也不合成停止命令，计入 `failed_cycles`。`run()` 继续运行，连续 `max_failed_cycles`（默认 5）个失败周期后返回最后一个错误。驱动必须自建命令超时与安全态。
 - **反馈过期。** 反馈超过 `feedback_timeout_s` 不算失败：命令照常写出，但带 `RobotCommand::fresh = false`，由驱动或调用方决定是否下发。
+- **同步（attach）。** `Engine::attached()` 为 true 表示反馈已连续新鲜 `feedback_timeout_s`，且这段窗口内每个周期都把命令状态同步到了新鲜反馈。一次过期读取即脱离同步。之后第一个新鲜且未暂停的周期让各模块重新基准（丢弃保持的目标，各模块停在机器人当前所在处）。此后每个新鲜且未暂停的周期都在求解前把命令状态同步到最新测量状态；窗口内设的目标保留。窗口走完的那个周期完成同步，计入 `attaches`。因此同步需要 `feedback_timeout_s` 的真实时间，所有标为新鲜的命令都从当前测量状态出发。创建时反馈过期或无时间戳的引擎从未同步状态开始；创建时反馈新鲜的引擎也要等满这段窗口。写出不受门控：驱动真机的调用方应只在 `attached()` 时下发命令，并在其变为 true 之后再设目标。`feedback_timeout_s = 0` 时引擎始终处于同步状态。
+- **反馈分组。** 配置 `feedback_groups` 后（例如机械臂用关节编码器、底盘用里程计），每组有各自的时间戳（`RobotState::group_stamps_ns`）、过期判断、窗口和同步状态（`Engine::group_attached()`、`RobotCommand::group_attached`）。某组过期只让该组脱离同步：它的同步只改本组关节，只重新同步驱动这些关节的模块。只有所有组都已同步时 `attached()` 和 `RobotCommand::fresh` 才为 true；驱动也可以按每组的标志分别下发。
 - **命令守卫。** `CommandGuardOptions` 按限位检查命令。reject 模式下越界命令使该周期返回错误并计入 `guard_rejects`；clamp 模式钳位后照常写出并计入 `guard_clamps`。
 - **遥测。** 使用方只读值类型快照（`EngineSnapshot`），不持有 `const Engine&`。
 

@@ -21,6 +21,8 @@ The example config [omni_dual_arm.yaml](../../examples/omni_dual_arm/omni_dual_a
 
 Ports are a module's runtime inputs. `Module.ports` lists their names, types and ranges. `write_port` takes effect on the next step. The debug protocol's `set_port` is equivalent.
 
+To write only some elements of a `vector` port, give their `labels` with one value each; the others keep their value. Unknown or duplicate labels are an error. This works for every vector port: Python `write_port(name, values, labels=[...])`, debug protocol `set_port` with `labels`, C++ `Module::write_port(index, labels, values)` and C `kstone_engine_set_port_labeled`. On a joint target it behaves like the named `set_target`; see [joint_target](joint_target.md).
+
 | Type | Value |
 |---|---|
 | `vector` | Fixed-length array with `labels`, `lower`, `upper` |

@@ -24,9 +24,10 @@ modules:
 | `model` | 必填 | 机器人模型，见 [model](#model) |
 | `rate_hz` | 100 | 控制频率 |
 | `realtime` | false | 在 `run()` 中应用 `thread` 设置（实时调度）；`kstone run --realtime` 强制开启。`run()` 总是按时钟节拍运行 |
-| `feedback_timeout_s` | 0.25 | 反馈超过该时长或没有时间戳即视为过期；0 = 永不过期。见[运行契约](robot.md#run-contract) |
+| `feedback_timeout_s` | 0.25 | 反馈超过该时长或没有时间戳即视为过期；也是反馈转为新鲜后的同步窗口；0 = 永不过期且立即同步。见[运行契约](robot.md#run-contract) |
 | `max_failed_cycles` | 5 | 连续失败这么多个周期后 `run()` 返回 |
 | `feedback_joints` | 全部标量关节 | 实测位置参与闭环估计（碰撞、质心、回零）的关节。关节名或 fnmatch 模式 |
+| `feedback_groups` | 无 | 各自有反馈时间戳、新鲜度和同步状态的关节组，例如 `[{name: base, joints: [root_joint]}]`。关节名或 fnmatch 模式；未分组的关节组成最后一组 `default`。见[运行契约](robot.md#run-contract) |
 | `safety` | | 命令守卫，见 [safety](#safety) |
 | `solver` | | QP 求解器，见 [solver](#solver) |
 | `robot` | loopback | 机器人接口，见 [robot](#robot) |

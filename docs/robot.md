@@ -15,7 +15,7 @@ kstone run <config.yaml> [--duration s] [--realtime] [--serve [host:port|port]] 
 
 ## Driver plugins
 
-A driver is a shared library implementing the C ABI in [robot_plugin.h](../include/kstone/runtime/robot_plugin.h). Start from [example_robot.c](../examples/robot_plugin/example_robot.c). `read` must return a CLOCK_MONOTONIC timestamp, otherwise the feedback counts as stale.
+A driver is a shared library implementing the C ABI in [robot_plugin.h](../include/kstone/runtime/robot_plugin.h). Start from [example_robot.c](../examples/robot_plugin/example_robot.c). `read` must return a CLOCK_MONOTONIC timestamp, otherwise the feedback counts as stale. With `feedback_groups` configured, each joint carries its group index, `read` also stamps each group in `group_stamps_ns` (-1 = stale; only `default` falls back to the state stamp), and `write` receives each group's attached flag in `group_attached`.
 
 ```bash
 cc -shared -fPIC -Iinclude examples/robot_plugin/example_robot.c -o libexample_robot.so
@@ -50,6 +50,8 @@ thread:
 
 - **Failed cycle.** If reading, solving or writing fails, the engine writes no command and does not synthesize a stop command. The cycle counts in `failed_cycles`. `run()` keeps going and returns the last error after `max_failed_cycles` (default 5) consecutive failures. Drivers must implement their own command timeout and safe state.
 - **Stale feedback.** Feedback older than `feedback_timeout_s` is not a failure. The command is still written, with `RobotCommand::fresh = false`, and the driver or caller decides whether to send it.
+- **Attach.** `Engine::attached()` is true once feedback has stayed fresh for `feedback_timeout_s` and the commanded state has been synced to it on every cycle of that window. A stale read detaches the engine. The first fresh, unpaused cycle after that rebases the modules (held targets are dropped, so each module holds where the robot is). From then on every fresh, unpaused cycle syncs the commanded state to the latest measurement before solving; targets set during the window are kept. The cycle that completes the window attaches and counts in `attaches`, so attaching takes `feedback_timeout_s` of wall time and every command flagged fresh starts from a current measurement. An engine created with stale or unstamped feedback starts detached; one created with fresh feedback still waits out the window. Writing is not gated: callers that drive hardware should forward commands only while `attached()`, and set targets after it turns true. With `feedback_timeout_s = 0` the engine is always attached.
+- **Feedback groups.** With `feedback_groups` (for example an arm on joint encoders and a base on odometry), each group has its own stamp (`RobotState::group_stamps_ns`), staleness, window and attached state (`Engine::group_attached()`, `RobotCommand::group_attached`). A stale group detaches only itself: its sync touches only its joints and resynchronizes only the modules driving them. `attached()` and `RobotCommand::fresh` are true only while every group is attached; a driver can instead forward each group on its own flag.
 - **Command guard.** `CommandGuardOptions` checks commands against limits. In reject mode, an out-of-range command makes the cycle return an error and counts in `guard_rejects`. In clamp mode, the command is clamped, written and counted in `guard_clamps`.
 - **Telemetry.** Consumers read value-type snapshots (`EngineSnapshot`) and never hold a `const Engine&`.
 

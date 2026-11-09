@@ -23,8 +23,9 @@ Config lives in the `chassis:` sub-object:
 - `position_tolerance`, `orientation_tolerance`: arrival check, default 0.01 m and 0.02 rad.
 - `target_position_deadband`, `target_orientation_deadband`: differential only; target changes below these keep the current path.
 - `command_timeout_s` (default 0.25): a command not refreshed for this long clears motion with reason `command_timeout`. This is not a fault.
-- `odom_timeout_s` (default 0.25): odometry older than this is rejected. Between odometry updates the pose is dead-reckoned from the output velocity.
-- `max_dt_s` (0.1), `allowed_missed_cycles` (2): a gap between steps longer than `max(max_dt_s, period × allowed_missed_cycles)` faults with `scheduler_discontinuity`. Inside the module, only a skipped step (disable, then enable) resynchronises and recovers.
+- Odometry timeout: the engine `feedback_timeout_s` (0 = odometry never goes stale). Odometry older than this is rejected. While the last odometry is fresh the pose holds it; once it expires the pose is dead-reckoned from the output velocity.
+- The chassis starts at the root pose of its first cycle (on an engine, the robot's initial state). An engine resynchronisation with rebase that covers the root (for example when the group holding the root attaches) resets the chassis to the measured root pose.
+- `max_dt_s` (0.1), `allowed_missed_cycles` (2): a gap between steps longer than `max(max_dt_s, period × allowed_missed_cycles)` faults with `scheduler_discontinuity`. Only a skipped step (disable, then enable) or an engine resynchronisation covering the root resynchronises and recovers.
 
 Top level: `center_in_root` (fixed pose of the control centre in the root frame), `period_s` (initial period; afterwards the engine dt is used each cycle).
 
@@ -75,5 +76,5 @@ ch.tune({"pose_limits": {"max_linear_velocity": 0.3, "planner_mode": "axis_time"
 - A velocity command is a lease: once writes stop, the base stops within `command_timeout_s`. Teleoperation must write at a fixed rate.
 - `pose_limits` affects pose mode only; velocity mode always uses the `max_*` values in `chassis`. A tune does not check them against those maxima, so keep them within what the base can do.
 - `straight` only goes with `differential`, `axis_*` only with `omni`. Other pairs are rejected.
-- Odometry stamped more than `odom_timeout_s` before now is rejected silently and the pose relies on dead reckoning alone. On hardware, check that the odometry and controller clocks agree.
+- Odometry stamped more than the engine `feedback_timeout_s` before now is rejected silently and the pose relies on dead reckoning alone. On hardware, check that the odometry and controller clocks agree.
 - Pausing the process in a debugger or stepping too slowly triggers a `scheduler_discontinuity` fault and the base stops. Disable and re-enable the module to recover.

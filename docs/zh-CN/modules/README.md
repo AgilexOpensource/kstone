@@ -21,6 +21,8 @@
 
 端口是模块的运行时输入。`Module.ports` 列出名称、类型和范围，`write_port` 在下一次 step 生效，调试协议的 `set_port` 与之等价。
 
+只写 `vector` 端口的部分元素时，给出这些元素的 `labels`，每个对应一个值，其余元素保持不变。标签未知或重复会报错。所有 vector 端口都支持：Python `write_port(name, values, labels=[...])`、调试协议带 `labels` 的 `set_port`、C++ `Module::write_port(index, labels, values)` 和 C `kstone_engine_set_port_labeled`。用在关节目标上时与按名字的 `set_target` 行为一致，见 [joint_target](joint_target.md)。
+
 | 类型 | 值 |
 |---|---|
 | `vector` | 定长数组，带 `labels`、`lower`、`upper` |

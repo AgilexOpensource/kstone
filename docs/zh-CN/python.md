@@ -23,7 +23,7 @@ solver = kstone.load_solver("tests/fixtures/arm_loopback.yaml")
 print(solver.modules)          # ['tool', 'arm', 'fingers']
 print(solver.module("arm").ports)
 
-solver.module("arm").write_port("target", [0.5, -0.3, 0.2])
+solver.module("arm").write_port("target", [0.5, -0.3, 0.2])  # labels=["j3"] 只写 j3
 q = solver.initial
 for _ in range(300):
     result = solver.solve(q, 0.01)
@@ -63,9 +63,11 @@ print(engine.stats["cycles"], engine.stats["failed_cycles"])
 ```
 
 - `run()` 会阻塞，直到过了 `duration_s` 或者另一个线程调用了 `stop()`。不传时长就一直运行到停止为止。
-- `run()` 按真实时钟运行。要比实时更快地推进（测试、离线仿真），循环调用 `step()`。
+- `run()` 按真实时钟运行。要比实时更快地推进（测试、离线仿真），循环调用 `step()`，并设 `feedback_timeout_s: 0`；否则引擎要等这么长的真实时间才同步，此前模块保持不动。
 - `engine.q` 是命令的关节位置，`engine.measured` 是最近一次从机器人读到的关节位置。
 - `engine.snapshot()` 把所有状态打包成一个 dict 返回。
+- `engine.fresh` 表示最近一次读取是否新鲜；`engine.attached` 表示引擎是否已同步到新鲜反馈且此后一直新鲜。只在 attached 时向真机下发命令，见[运行契约](robot.md#run-contract)。
+- `engine.groups` 以 `{name, fresh, attached}` 列出各反馈组（先是配置的组，最后是 `default`）；`engine.feedback_groups` 返回配置的组。`snapshot()["groups"]` 是同一列表。
 
 要驱动真机，修改配置的 `robot:` 部分即可，见[接入机器人](robot.md)。
 
@@ -112,7 +114,7 @@ engine.tune_joint_limits({"velocity": {"j1": 0.5}})
 engine.tune_joint_limits({"reset": True})
 ```
 
-用 `module.enabled = False` 可以关闭模块。
+用 `module.enabled = False` 可以关闭模块。`engine.home_all()` 让当前控制着关节、且支持 home 的模块都回到 home（看 `home_state`）。
 
 <a id="watch-it-in-the-browser"></a>
 ## 在浏览器里查看

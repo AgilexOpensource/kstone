@@ -10,6 +10,8 @@ A joint-space target, fed to the solver through a jerk-limited joint trajectory.
 |---|---|---|
 | `target` | vector | One value per joint in `joints` order; components outside the position limits are clamped |
 
+C++ `JointTargetModule::set_target(names, values)` sets only the named joints, in any order; the others keep the current target, or hold the measured position if the module is disabled or held. Unknown or duplicate names are an error. A labeled port write does the same, e.g. Python `write_port("target", [0.2], labels=["elbow"])`; see [Ports](README.md#ports).
+
 ## Key parameters
 
 - `joints`: scalar joints, at most one per mimic group.
