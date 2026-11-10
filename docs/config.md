@@ -50,12 +50,12 @@ modules:
 
 ```yaml
 model:
-  file: omni_dual_arm.urdf
+  file: robot.urdf
   joint_limits:
-    velocity: {left_gripper_joint: 1.0}
+    velocity: {gripper_joint: 1.0}
     position:
-      lower: {torso_joint_2: 0.2618}
-      upper: {torso_joint_2: 2.2}
+      lower: {elbow_joint: 0.0873}
+      upper: {elbow_joint: 2.4}
 ```
 
 `locked_joints` lists joints the solver never moves. They keep their `robot.initial` value (or the neutral value), stay in the model, and are still part of the state and the command, so `joint_states` stays complete. Modules that list a locked joint keep working on the remaining joints. The floating base and coupled mimic followers cannot be listed; use `root: fixed`, or lock the leader:

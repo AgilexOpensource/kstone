@@ -51,12 +51,12 @@ modules:
 
 ```yaml
 model:
-  file: omni_dual_arm.urdf
+  file: robot.urdf
   joint_limits:
-    velocity: {left_gripper_joint: 1.0}
+    velocity: {gripper_joint: 1.0}
     position:
-      lower: {torso_joint_2: 0.2618}
-      upper: {torso_joint_2: 2.2}
+      lower: {elbow_joint: 0.0873}
+      upper: {elbow_joint: 2.4}
 ```
 
 `locked_joints` 列出求解器永远不动的关节。它们保持 `robot.initial` 的值（没给就用零位），仍留在模型里，也仍在状态和命令里，所以 `joint_states` 依旧完整。列了锁定关节的模块继续用其余关节工作。浮动基座和 coupled 模式下的 mimic 跟随关节不能列；前者用 `root: fixed`，后者锁它的主关节：
