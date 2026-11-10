@@ -31,7 +31,7 @@ The debug server (`kstone run --serve`, `Engine.serve` or `DebugServer`) speaks 
 | `home_all` | Home every homeable module currently in control (`ModuleSet::home_all`) |
 | `tune`, `tune_solver`, `tune_limits` | Change module, solver or joint limit parameters |
 | `pause`, `step`, `set_rate` | Pause the engine, step while paused, change the control rate |
-| `asset` | Fetch a file the URDF references, such as a mesh; only when listed in `capabilities` |
+| `asset` | Fetch a file the URDF references, such as a mesh; only when listed in `capabilities`. `model.assets` lists the files, each with a `size` and a `stamp` that changes when the file changes; a file changed since then fails with `io_error` |
 
 The ops `set_port` through `set_rate` in the table are commands. Arbitration works like this:
 

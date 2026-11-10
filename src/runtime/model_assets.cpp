@@ -104,20 +104,16 @@ class Sha256 {
     std::uint64_t length_{0};
 };
 
-Status hash_file(const fs::path& path, std::string& sha, std::uint64_t& size) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) return make_error(ErrorCode::io_error, "cannot open '" + path.string() + "'");
-    Sha256 h;
-    std::array<char, 1 << 16> buf{};
-    size = 0;
-    while (in) {
-        in.read(buf.data(), static_cast<std::streamsize>(buf.size()));
-        const auto n = static_cast<std::size_t>(in.gcount());
-        h.update(reinterpret_cast<const unsigned char*>(buf.data()), n);
-        size += n;
-    }
-    if (in.bad()) return make_error(ErrorCode::io_error, "cannot read '" + path.string() + "'");
-    sha = h.hex();
+// Size and modification time stand in for the content, so building never reads the meshes.
+Status stamp_file(const fs::path& path, std::string& stamp, std::uint64_t& size, fs::file_time_type& mtime) {
+    std::error_code ec;
+    size = fs::file_size(path, ec);
+    if (!ec) mtime = fs::last_write_time(path, ec);
+    if (ec) return make_error(ErrorCode::io_error, "cannot stat '" + path.string() + "': " + ec.message());
+    char buf[48];
+    std::snprintf(buf, sizeof buf, "%llx-%llx", static_cast<unsigned long long>(size),
+                  static_cast<unsigned long long>(mtime.time_since_epoch().count()));
+    stamp = buf;
     return {};
 }
 
@@ -253,7 +249,7 @@ ConfigNode ModelAssets::describe() const {
     ConfigNode list = ConfigNode::map();
     for (const File& f : files) {
         ConfigNode meta = ConfigNode::map();
-        meta.set("sha256", f.sha256);
+        meta.set("stamp", f.stamp);
         meta.set("size", static_cast<double>(f.size));
         list.set(f.name, std::move(meta));
     }
@@ -276,7 +272,7 @@ Status ModelAssets::read(const std::string& name, std::uint64_t offset, std::siz
         return {};
     }
     std::error_code ec;
-    if (fs::file_size(it->path, ec) != total || ec)
+    if (fs::file_size(it->path, ec) != total || ec || fs::last_write_time(it->path, ec) != it->mtime || ec)
         return make_error(ErrorCode::io_error, "asset '" + name + "' changed on the server since start");
     std::ifstream in(it->path, std::ios::binary);
     out.assign(n, '\0');
@@ -307,8 +303,8 @@ Result<ModelAssets> build_model_assets(const ModelSource& source, const Resource
 
     auto add = [&](const fs::path& path, const std::string& name) {
         if (files.count(name) != 0) return true;
-        ModelAssets::File f{name, path, {}, 0};
-        if (Status s = hash_file(path, f.sha256, f.size); !s) {
+        ModelAssets::File f{name, path, {}, 0, {}};
+        if (Status s = stamp_file(path, f.stamp, f.size, f.mtime); !s) {
             error = s.error().message;
             return false;
         }
@@ -369,10 +365,10 @@ Result<ModelAssets> build_model_assets(const ModelSource& source, const Resource
 
     assets.document = std::move(rewritten);
     files.emplace(assets.model,
-                  ModelAssets::File{assets.model, {}, sha256_hex(assets.document), assets.document.size()});
+                  ModelAssets::File{assets.model, {}, sha256_hex(assets.document).substr(0, 16), assets.document.size(), {}});
     std::string manifest;
     for (auto& [name, f] : files) {
-        manifest += name + '\n' + f.sha256 + '\n' + std::to_string(f.size) + '\n';
+        manifest += name + '\n' + f.stamp + '\n' + std::to_string(f.size) + '\n';
         assets.files.push_back(std::move(f));
     }
     assets.id = sha256_hex(manifest).substr(0, 32);

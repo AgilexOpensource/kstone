@@ -13,8 +13,6 @@ model:
         left_arm_joint_4: 0.0873  # a fully stretched elbow can fold outward and get stuck
         right_arm_joint_4: 0.0873
         torso_joint_2: 0.2618
-      upper:
-        torso_joint_2: 2.2
 rate_hz: 50  # convergence is per cycle, so a higher rate also raises the effective gain
 feedback_timeout_s: 0.25
 solver:

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <arpa/inet.h>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -748,8 +749,7 @@ TEST_CASE("debug server: serves the URDF and the files it references") {
     CHECK(files->size() == 4);
     const ConfigNode* png = files->find("assets/000/tex/skin.png");
     REQUIRE(png);
-    CHECK(png->find("sha256")->as_string() ==
-          "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    CHECK(!png->find("stamp")->as_string().empty());
     CHECK(png->find("size")->as_number() == 3);
     REQUIRE(assets->find("missing")->items().size() == 1);
     CHECK(assets->find("missing")->items().at(0).as_string() == "meshes/gone.stl");
@@ -767,6 +767,12 @@ TEST_CASE("debug server: serves the URDF and the files it references") {
     CHECK(code_of(reply_to(c, 6)) == "out_of_range");
     c.send(R"({"op":"asset","id":7,"name":"model.urdf","offset":-1})");
     CHECK(code_of(reply_to(c, 7)) == "invalid_argument");
+    const fs::path skin = dir / "robot" / "meshes" / "tex" / "skin.png";
+    const auto stamped = fs::last_write_time(skin);
+    write_file(skin, "xyz");
+    fs::last_write_time(skin, stamped + std::chrono::seconds(1));
+    c.send(R"({"op":"asset","id":8,"name":"assets/000/tex/skin.png"})");
+    CHECK(code_of(reply_to(c, 8)) == "io_error");
     (*server)->stop();
 
     DebugServerOptions off = options;

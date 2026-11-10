@@ -33,7 +33,7 @@
 | `home_all` | 让当前持有控制权的可回 home 模块全部回 home（`ModuleSet::home_all`） |
 | `tune`、`tune_solver`、`tune_limits` | 修改模块、求解器或关节限位参数 |
 | `pause`、`step`、`set_rate` | 暂停引擎、暂停时单步、修改控制频率 |
-| `asset` | 获取 URDF 引用的文件（如网格）；仅当 `capabilities` 中列出时可用 |
+| `asset` | 获取 URDF 引用的文件（如网格）；仅当 `capabilities` 中列出时可用。`model.assets` 列出这些文件，每个带 `size` 和 `stamp`，文件变化时 `stamp` 随之变化；此后被改动的文件返回 `io_error` |
 
 表中 `set_port` 到 `set_rate` 这些 op 属于命令。仲裁规则如下：
 

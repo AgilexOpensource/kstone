@@ -18,8 +18,9 @@ struct ModelAssets {
     struct File {
         std::string name;            ///< Bundle-relative, '/'-separated.
         std::filesystem::path path;  ///< Empty for the rewritten document itself.
-        std::string sha256;
+        std::string stamp;  ///< Changes when the file does: size and mtime, or a content hash for `model`.
         std::uint64_t size{0};
+        std::filesystem::file_time_type mtime{};
     };
 
     std::string id;                    ///< Hash of the manifest; unchanged models keep their id.
@@ -28,7 +29,7 @@ struct ModelAssets {
     std::vector<File> files;           ///< Sorted by name; includes `model`.
     std::vector<std::string> missing;  ///< References the resolver could not find.
 
-    /// {id, model, files: {name: {sha256, size}}, missing: [...]}.
+    /// {id, model, files: {name: {stamp, size}}, missing: [...]}.
     ConfigNode describe() const;
     /// Up to `max_bytes` from `offset`; `total` is the file size. Errors for unlisted or changed files.
     Status read(const std::string& name, std::uint64_t offset, std::size_t max_bytes, std::string& out,

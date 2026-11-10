@@ -46,8 +46,9 @@ struct DebugServerOptions {
 ///          solver {params, tune_schema} (see ModuleSet::tune_solver);
 ///          joint_limits {velocity, position {lower, upper}}: run-time overrides (see ModuleSet::joint_limits);
 ///          stats [{name, kind (counter|duration), unit? ("s" for durations)}]: the keys of state.stats (EngineStats);
-///          assets is null or {id, model, files: {name: {sha256, size}}, missing}: a URDF whose references point
-///          into the bundle, so a client on another host can fetch each file with the asset op;
+///          assets is null or {id, model, files: {name: {stamp, size}}, missing}: a URDF whose references point
+///          into the bundle, so a client on another host can fetch each file with the asset op; built when the first
+///          client authenticates; stamp (size and mtime) changes when a file does, and a changed file reads as io_error;
 ///   params {module, values}  to every client after a successful tune, and the latest one per module right after model;
 ///   solver_params {values}  likewise after a successful tune_solver;
 ///   joint_limits {values}  likewise after a successful tune_limits;

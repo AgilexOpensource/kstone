@@ -357,7 +357,15 @@ struct DebugServer::Impl {
 
     // Static description, fixed at start; sent as "model" once a client is authenticated.
     std::string model;
+    ConfigNode model_doc;
     std::optional<detail::ModelAssets> assets;
+    // Inputs for the asset bundle, built on the io thread when a client first needs it.
+    struct AssetInputs {
+        ModelSource source;
+        ResourceResolver resolver;
+        Logger log;
+    };
+    std::optional<AssetInputs> asset_inputs;
     ConfigNode capabilities;
     SteadyClock::duration publish_period{};
     std::vector<std::string> module_ids;
@@ -487,7 +495,7 @@ struct DebugServer::Impl {
         ConfigNode doc = ConfigNode::map();
         doc.set("type", "model");
         doc.set("urdf", options.urdf.string());
-        doc.set("assets", assets ? assets->describe() : ConfigNode{});
+        doc.set("assets", ConfigNode{});
         doc.set("rate_hz", engine.options().rate_hz);
         doc.set("publish_hz", options.publish_hz);
         doc.set("nq", static_cast<double>(robot.nq()));
@@ -619,6 +627,26 @@ struct DebugServer::Impl {
         }
         doc.set("stats", std::move(stats));
         model = to_json(doc, 0);
+        model_doc = std::move(doc);
+    }
+
+    void ensure_assets() {
+        if (!asset_inputs) return;
+        const AssetInputs in = std::move(*asset_inputs);
+        asset_inputs.reset();
+        auto built = detail::build_model_assets(in.source, in.resolver);
+        if (!built) {
+            in.log.log(LogLevel::warn, "debug_server", "not serving model assets: " + built.error().message);
+            return;
+        }
+        if (!built->missing.empty()) {
+            std::string list;
+            for (const std::string& m : built->missing) list += (list.empty() ? "" : ", ") + m;
+            in.log.log(LogLevel::warn, "debug_server", "model files not found, clients render without them: " + list);
+        }
+        assets = std::move(*built);
+        model_doc.set("assets", assets->describe());
+        model = to_json(model_doc, 0);
     }
 
     // ---- control thread ----
@@ -820,6 +848,7 @@ struct DebugServer::Impl {
 
     void on_authed(Client& c) {
         c.authed = true;
+        ensure_assets();
         frame(c.out, model);
         for (const std::string& text : latest_params)
             if (!text.empty()) frame(c.out, text);
@@ -993,6 +1022,7 @@ struct DebugServer::Impl {
                              "offset must be a non-negative integer");
             offset = off->as_number();
         }
+        ensure_assets();
         if (!assets)
             return reply(c, id, to_string(ErrorCode::not_found), "this server does not serve model assets");
         std::string data;
@@ -1427,26 +1457,12 @@ Result<std::shared_ptr<DebugServer>> DebugServer::start(Engine& engine, const De
     const ModelSource& source = engine.modules().model()->source();
     if (d->options.urdf.empty() && source.kind == ModelSource::Kind::file && source.format == "urdf")
         d->options.urdf = source.location;
-    if (options.serve_assets) {
-        auto built = detail::build_model_assets(source, engine.context().resources);
-        const Logger& log = engine.context().log;
-        if (!built) {
-            if (source.format == "urdf")
-                log.log(LogLevel::warn, "debug_server", "not serving model assets: " + built.error().message);
-        } else {
-            if (!built->missing.empty()) {
-                std::string list;
-                for (const std::string& m : built->missing) list += (list.empty() ? "" : ", ") + m;
-                log.log(LogLevel::warn, "debug_server",
-                        "model files not found, clients render without them: " + list);
-            }
-            d->assets = std::move(*built);
-        }
-    }
+    if (options.serve_assets && source.format == "urdf")
+        d->asset_inputs = Impl::AssetInputs{source, engine.context().resources, engine.context().log};
     std::vector<ConfigNode> caps;
     for (const char* op : {"ping", "subscribe"}) caps.emplace_back(op);
     for (const char* op : kCommandOps) caps.emplace_back(op);
-    if (d->assets) caps.emplace_back("asset");
+    if (d->asset_inputs) caps.emplace_back("asset");
     d->capabilities = ConfigNode::list(std::move(caps));
     d->build_model(engine);
     d->prepare_snapshots(engine);
