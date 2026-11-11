@@ -10,7 +10,6 @@ Applies a preference in the null space of a frame_target (`primary`) without aff
 - `preference`:
   - `posture`: stay close to a reference posture.
   - `manipulability`: raise manipulability; `manipulability_axes` selects the directions (translation only by default).
-  - `joint_limits`: stay away from joint limits, active within `joint_limits_band` of a limit. Unavailable when every joint is unbounded.
 - `reference` (the posture baseline):
   - `initial` (default): the initial q.
   - `current`: the current q each cycle, which only damps null-space motion.
@@ -21,7 +20,7 @@ Applies a preference in the null space of a frame_target (`primary`) without aff
   - Tuning only `reference` to `custom` takes the configured `posture`, or the current q when none is configured, then applies `posture_values`.
   - Switching to `initial` / `neutral` / `current` clears `posture_values`.
   - `reseed_current: true` (tune only) stores the current q as the custom posture and selects the posture preference.
-- `posture_weight`, `manipulability_weight`, `joint_limits_weight`: weights of each preference. `posture_velocity_scale` caps the speed of returning to the posture, in (0, 1].
+- `posture_weight`, `manipulability_weight`: weights of each preference. `posture_velocity_scale` caps the speed of returning to the posture, in (0, 1].
 - `projector.damping` / `threshold`: null-space projector damping; threshold > 0 enables adaptive damping.
 
 ## Example
@@ -39,7 +38,7 @@ left_null:
 null = e.module("left_null")
 null.tune({"reference": "custom", "posture_values": {"left_arm_joint_3": -1.0}})
 null.tune({"reseed_current": True})  # store the current posture as the preference
-null.tune({"preference": "joint_limits"})
+null.tune({"preference": "manipulability"})
 ```
 
 ## Pitfalls

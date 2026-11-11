@@ -2209,7 +2209,6 @@ TEST_CASE("null_space module: one preference task active, switchable at runtime"
     loop.step();
     CHECK(active(loop.out, "ns/posture"));
     CHECK_FALSE(active(loop.out, "ns/manipulability"));
-    CHECK_FALSE(active(loop.out, "ns/joint_limits"));
 
     ns->set_preference(NullSpacePreference::manipulability);
     loop.step();
@@ -2217,9 +2216,9 @@ TEST_CASE("null_space module: one preference task active, switchable at runtime"
     CHECK_FALSE(active(loop.out, "ns/posture"));
     CHECK(active(loop.out, "ns/manipulability"));
 
-    ns->set_preference(NullSpacePreference::joint_limits);
+    ns->set_preference(NullSpacePreference::posture);
     loop.step();
-    CHECK(active(loop.out, "ns/joint_limits"));
+    CHECK(active(loop.out, "ns/posture"));
     CHECK_FALSE(active(loop.out, "ns/manipulability"));
 
     // The primary stays tracked under any preference.

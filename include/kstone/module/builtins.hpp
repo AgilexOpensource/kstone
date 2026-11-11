@@ -325,7 +325,7 @@ class KSTONE_EXPORT CenterOfMassModule final : public Module {
     bool inside_{false};
 };
 
-enum class NullSpacePreference { posture, manipulability, joint_limits };
+enum class NullSpacePreference { posture, manipulability };
 enum class PostureReference { initial, current, neutral, custom };
 
 struct NullSpaceModuleConfig {
@@ -347,33 +347,20 @@ struct NullSpaceModuleConfig {
     double manipulability_rate{0.1};
     Eigen::Matrix<double, 6, 1> manipulability_axes{
         (Eigen::Matrix<double, 6, 1>() << 1, 1, 1, 0, 0, 0).finished()};
-
-    double joint_limits_weight{10.0};
-    double joint_limits_band{0.2};
-    double joint_limits_rate{1.0};
 };
 
-/// One of three null-space preferences under a frame task; switchable at runtime without allocation.
+/// One of two null-space preferences under a frame task; switchable at runtime without allocation.
 class KSTONE_EXPORT NullSpaceModule final : public Module {
   public:
     NullSpaceModule(std::string id, NullSpaceModuleConfig config);
     const char* type() const noexcept override { return "null_space"; }
 
     std::vector<std::string> dependencies() const override;
-    /// False (unchanged) for joint_limits after configure() found no bounded joints.
-    bool set_preference(NullSpacePreference preference) noexcept {
-        if (preference == NullSpacePreference::joint_limits && posture_ && !joint_limits_) return false;
-        preference_ = preference;
-        return true;
-    }
+    void set_preference(NullSpacePreference preference) noexcept { preference_ = preference; }
     NullSpacePreference preference() const noexcept { return preference_; }
     const std::shared_ptr<NullSpacePostureTask>& posture_task() const noexcept { return posture_; }
     const std::shared_ptr<NullSpaceManipulabilityTask>& manipulability_task() const noexcept {
         return manipulability_;
-    }
-    /// Null when none of the joints is bounded.
-    const std::shared_ptr<NullSpaceJointLimitTask>& joint_limits_task() const noexcept {
-        return joint_limits_;
     }
     /// After configure(). See the module's schema for the tunable keys.
     Status tune(const ConfigNode& params) override;
@@ -398,8 +385,7 @@ class KSTONE_EXPORT NullSpaceModule final : public Module {
     bool have_q_{false};
     std::shared_ptr<NullSpacePostureTask> posture_;
     std::shared_ptr<NullSpaceManipulabilityTask> manipulability_;
-    std::shared_ptr<NullSpaceJointLimitTask> joint_limits_;
-    TaskHandle handles_[3];  ///< Indexed by NullSpacePreference.
+    TaskHandle handles_[2];  ///< Indexed by NullSpacePreference.
     NullSpacePreference preference_;
 };
 

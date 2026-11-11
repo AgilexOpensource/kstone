@@ -227,8 +227,7 @@ ParamSchema<NullSpaceModuleConfig> null_space() {
     s.field("joints", &C::joints).doc("Empty = the primary's driven scalar joints.");
     s.field("preference", &C::preference,
             {{"posture", NullSpacePreference::posture},
-             {"manipulability", NullSpacePreference::manipulability},
-             {"joint_limits", NullSpacePreference::joint_limits}})
+             {"manipulability", NullSpacePreference::manipulability}})
         .tunable();
     s.field("projector", &C::projector, null_space_settings());
     s.field("task", &C::task, task_options());
@@ -254,9 +253,6 @@ ParamSchema<NullSpaceModuleConfig> null_space() {
     s.field("manipulability_weight", &C::manipulability_weight).at_least(0).at_most(kMaxWeight).tunable();
     s.field("manipulability_rate", &C::manipulability_rate).above(0);
     s.field("manipulability_axes", &C::manipulability_axes).at_least(0);
-    s.field("joint_limits_weight", &C::joint_limits_weight).at_least(0).at_most(kMaxWeight).tunable();
-    s.field("joint_limits_band", &C::joint_limits_band).above(0).tunable();
-    s.field("joint_limits_rate", &C::joint_limits_rate).above(0).tunable();
     return s;
 }
 

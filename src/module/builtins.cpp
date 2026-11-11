@@ -3,6 +3,7 @@
 #include "builtin_schemas.hpp"
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <limits>
 #include <sstream>
 #include <utility>
@@ -103,9 +104,6 @@ Status with_who(Status s, const std::string& who) {
 
 Status not_configured(const std::string& who) {
     return make_error(ErrorCode::invalid_argument, who + ": not configured");
-}
-Status no_bounded_joints(const std::string& who) {
-    return make_error(ErrorCode::invalid_argument, who + ": no bounded joints for joint_limits");
 }
 
 bool touches_motion(const ConfigNode& params) {
@@ -1194,7 +1192,6 @@ Status NullSpaceModule::tune(const ConfigNode& params) {
         next.posture = seed_from_q();
         next.posture_values.clear();
     }
-    if (next.preference == NullSpacePreference::joint_limits && !joint_limits_) return no_bounded_joints(who);
     Eigen::VectorXd target;
     if (Status s = posture_target(next, target); !s) return s;
     // Custom keeps one concrete value per joint, so tunables() shows what the posture is.
@@ -1208,12 +1205,6 @@ Status NullSpaceModule::tune(const ConfigNode& params) {
     if (Status s = posture_->set_velocity_scale(next.posture_velocity_scale); !s) return with_who(s, who);
     if (Status s = posture_->set_weight(next.posture_weight); !s) return with_who(s, who);
     if (Status s = manipulability_->set_weight(next.manipulability_weight); !s) return with_who(s, who);
-    if (joint_limits_) {
-        if (Status s = joint_limits_->set_settings(next.projector); !s) return with_who(s, who);
-        if (Status s = joint_limits_->set_band(next.joint_limits_band); !s) return with_who(s, who);
-        if (Status s = joint_limits_->set_rate(next.joint_limits_rate); !s) return with_who(s, who);
-        if (Status s = joint_limits_->set_weight(next.joint_limits_weight); !s) return with_who(s, who);
-    }
     if (Status s = posture_->set_target(target); !s) return with_who(s, who);
     preference_ = next.preference;
     config_ = std::move(next);
@@ -1285,28 +1276,12 @@ Status NullSpaceModule::configure(ModuleSetup& setup) {
     if (Status s = manipulability_->set_settings(config_.projector); !s) return s;
     if (Status s = manipulability_->set_weight(config_.manipulability_weight); !s) return s;
 
-    // Unbounded (continuous) joints have no limits to keep away from; with none bounded, joint_limits is absent.
-    std::vector<std::string> bounded;
-    for (const JointInfo& j : infos_)
-        if (j.nq == 1) bounded.push_back(j.name);
-    joint_limits_.reset();
-    if (!bounded.empty()) {
-        joint_limits_ = std::make_shared<NullSpaceJointLimitTask>(primary, bounded);
-        if (Status s = joint_limits_->set_settings(config_.projector); !s) return s;
-        if (Status s = joint_limits_->set_band(config_.joint_limits_band); !s) return s;
-        if (Status s = joint_limits_->set_rate(config_.joint_limits_rate); !s) return s;
-        if (Status s = joint_limits_->set_weight(config_.joint_limits_weight); !s) return s;
-    } else if (preference_ == NullSpacePreference::joint_limits) {
-        return no_bounded_joints(who);
-    }
-
-    const std::pair<const char*, std::shared_ptr<Task>> tasks[] = {
-        {"posture", posture_}, {"manipulability", manipulability_}, {"joint_limits", joint_limits_}};
+    const std::pair<const char*, std::shared_ptr<Task>> tasks[] = {{"posture", posture_},
+                                                                   {"manipulability", manipulability_}};
     TaskOptions options = config_.task;
     if (!options.level) options.level = config_.primary->task_options().level;
-    for (std::size_t k = 0; k < 3; ++k) {
+    for (std::size_t k = 0; k < std::size(tasks); ++k) {
         handles_[k] = TaskHandle{};
-        if (!tasks[k].second) continue;
         // Same joints as the primary's chain, so the stage frees only that chain.
         if (Status s = tasks[k].second->set_mask(config_.primary->driven()); !s) return s;
         Result<TaskHandle> h = setup.add_task(tasks[k].first, tasks[k].second, options);
@@ -1319,7 +1294,7 @@ Status NullSpaceModule::configure(ModuleSetup& setup) {
 
 Status NullSpaceModule::contribute(const Cycle& cycle) {
     const bool on = config_.primary->enabled() && config_.primary->held_by() == nullptr;
-    for (std::size_t k = 0; k < 3; ++k)
+    for (std::size_t k = 0; k < std::size(handles_); ++k)
         set_task_active(handles_[k], on && k == static_cast<std::size_t>(preference_));
     last_q_ = cycle.q;
     have_q_ = true;

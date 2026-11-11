@@ -515,7 +515,7 @@ TEST_CASE("alloc: gaze, null-space preference, centre of mass and homing do not 
         const int phase = i % 100;
         if (phase < 50) {  // move both hands, then let them idle so gaze drops them and homes
             lt.translation().x() += 1e-4;
-            rt.translation().y() -= 1e-4;
+            rt.translation().z() += 1e-4;
             const bool homing =
                 left->home_status() == HomeStatus::waiting || left->home_status() == HomeStatus::executing;
             ok = ok && (homing || left->set_target(lt)) && right->set_target(rt);
@@ -523,7 +523,9 @@ TEST_CASE("alloc: gaze, null-space preference, centre of mass and homing do not 
             ok = ok && left->request_home();
             ++homes;
         }
-        if (i % 40 == 0) ns->set_preference(static_cast<NullSpacePreference>((i / 40) % 3));
+        if (i % 40 == 0)
+            ns->set_preference((i / 40) % 3 == 1 ? NullSpacePreference::manipulability
+                                                 : NullSpacePreference::posture);
         ok = ok && set.step(q, v, now, 0.01, r);
         v = r.v;
         return ok;

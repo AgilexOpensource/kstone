@@ -170,15 +170,13 @@ modules:
     const char* names[] = {"c1", "c2", "c3", "c4"};
     for (const char* n : names) CHECK_FALSE(model->has_position_limit(*model->joint_id(n)));
 
-    // No bounded joints: the joint_limits preference is absent and refused, the others work.
+    // Unbounded joints: every null-space preference still configures and switches.
     auto ns = std::dynamic_pointer_cast<NullSpaceModule>(e.modules().module("ns"));
     REQUIRE(ns);
-    CHECK_FALSE(ns->joint_limits_task());
-    CHECK_FALSE(ns->set_preference(NullSpacePreference::joint_limits));
-    CHECK_FALSE(ns->tune(ConfigNode::map({{"preference", "joint_limits"}})));
     CHECK(ns->preference() == NullSpacePreference::posture);
-    CHECK(ns->set_preference(NullSpacePreference::manipulability));
-    CHECK(ns->set_preference(NullSpacePreference::posture));
+    CHECK(ns->tune(ConfigNode::map({{"preference", "manipulability"}})));
+    CHECK(ns->preference() == NullSpacePreference::manipulability);
+    CHECK(ns->tune(ConfigNode::map({{"preference", "posture"}})));
 
     auto joints = std::dynamic_pointer_cast<JointTargetModule>(e.modules().module("joints"));
     REQUIRE(joints);

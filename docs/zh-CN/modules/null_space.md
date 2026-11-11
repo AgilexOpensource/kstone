@@ -10,7 +10,6 @@
 - `preference`：
   - `posture`：靠近参考姿态。
   - `manipulability`：提高可操作度，`manipulability_axes` 选参与的方向（默认只看平移）。
-  - `joint_limits`：远离关节限位，在距限位 `joint_limits_band` 内起作用；所有关节都无界时此偏好不可用。
 - `reference`（posture 的基准）：
   - `initial`（默认）：初始 q。
   - `current`：每周期的当前 q，相当于只阻尼零空间运动。
@@ -21,7 +20,7 @@
   - 只把 `reference` 调成 `custom` 时，取配置的 `posture`；没配置就取当前 q；再叠加 `posture_values`。
   - 切到 `initial` / `neutral` / `current` 会清空 `posture_values`。
   - `reseed_current: true`（仅 tune）把当前 q 设为 custom 姿态并选中 posture 偏好。
-- `posture_weight`、`manipulability_weight`、`joint_limits_weight`：各偏好的权重。`posture_velocity_scale` 限制回到姿态的速度，取值 (0, 1]。
+- `posture_weight`、`manipulability_weight`：各偏好的权重。`posture_velocity_scale` 限制回到姿态的速度，取值 (0, 1]。
 - `projector.damping` / `threshold`：零空间投影的阻尼，threshold > 0 启用自适应阻尼。
 
 ## 示例
@@ -39,7 +38,7 @@ left_null:
 null = e.module("left_null")
 null.tune({"reference": "custom", "posture_values": {"left_arm_joint_3": -1.0}})
 null.tune({"reseed_current": True})  # 把当前姿态记为偏好
-null.tune({"preference": "joint_limits"})
+null.tune({"preference": "manipulability"})
 ```
 
 ## 常见坑

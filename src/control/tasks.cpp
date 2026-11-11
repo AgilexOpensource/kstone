@@ -29,12 +29,12 @@ bool is_rotation(const Eigen::Matrix3d& R) {
            std::abs(R.determinant() - 1.0) < 1e-6;
 }
 
-/// Resolve names to scalar joints (nv == 1, nq == 1 if require_nq1). Empty selects all of them.
-Status resolve_scalar(const Model& model, const std::vector<std::string>& names, bool require_nq1,
-                      const char* what, std::vector<JointId>& joints, std::vector<Index>& indices) {
+/// Resolve names to scalar joints (nv == 1). Empty selects all of them.
+Status resolve_scalar(const Model& model, const std::vector<std::string>& names, const char* what,
+                      std::vector<JointId>& joints, std::vector<Index>& indices) {
     joints.clear();
     indices.clear();
-    auto accept = [&](const JointInfo& j) { return j.nv == 1 && (!require_nq1 || j.nq == 1); };
+    auto accept = [](const JointInfo& j) { return j.nv == 1; };
     if (names.empty()) {
         for (const JointInfo& j : model.joints()) {
             if (j.id == 0 || !accept(j)) continue;
@@ -159,7 +159,7 @@ Status JointTask::on_bind(const Model& model) {
     if (names_.empty()) return make_error(ErrorCode::invalid_argument, "joint task: no joints");
     if (Status s = set_target(target_); !s) return s;
     std::vector<Index> indices;
-    return resolve_scalar(model, names_, false, "joint task", joints_, indices);
+    return resolve_scalar(model, names_, "joint task", joints_, indices);
 }
 
 Status JointTask::compute(const Tick& tick, Eigen::Ref<Eigen::MatrixXd> J, Eigen::Ref<Eigen::VectorXd> e) {
@@ -199,7 +199,7 @@ Status PostureTask::set_target(const Eigen::Ref<const Eigen::VectorXd>& target) 
 Status PostureTask::on_bind(const Model& model) {
     if (Status s = model.validate(target_); !s) return s;
     std::vector<JointId> joints;
-    if (Status s = resolve_scalar(model, names_, false, "posture task", joints, indices_); !s) return s;
+    if (Status s = resolve_scalar(model, names_, "posture task", joints, indices_); !s) return s;
     diff_.setZero(model.nv());
     return resize_rows(static_cast<Index>(indices_.size()));
 }
@@ -312,7 +312,7 @@ Status ManipulabilityTask::on_bind(const Model& model) {
     if (!id) return id.error();
     frame_ = *id;
     std::vector<JointId> joints;
-    if (Status s = resolve_scalar(model, names_, false, "manipulability", joints, indices_); !s) return s;
+    if (Status s = resolve_scalar(model, names_, "manipulability", joints, indices_); !s) return s;
     probe_ = std::make_unique<Workspace>(this->model());
     jac_.setZero(6, model.nv());
     const auto rows = static_cast<Index>(axes_.sum());
@@ -424,7 +424,7 @@ Status NullSpacePostureTask::on_bind(const Model& model) {
     if (Status s = check_primary(primary_, this, this->model(), "null-space posture"); !s) return s;
     if (Status s = model.validate(target_); !s) return s;
     std::vector<JointId> joints;
-    if (Status s = resolve_scalar(model, names_, false, "null-space posture", joints, indices_); !s) return s;
+    if (Status s = resolve_scalar(model, names_, "null-space posture", joints, indices_); !s) return s;
     const auto k = static_cast<Index>(indices_.size());
     if (limit_.size() == 0) limit_.setConstant(k, std::numeric_limits<double>::infinity());
     if (limit_.size() != k)
@@ -459,99 +459,6 @@ Status NullSpacePostureTask::compute(const Tick& tick, Eigen::Ref<Eigen::MatrixX
     if (ratio > 1) projected_ /= ratio;
     e = projected_;
     for (Index c = 0; c < k; ++c) J.col(indices_[static_cast<std::size_t>(c)]) = projector_.col(c);
-    return {};
-}
-
-// ---- NullSpaceJointLimitTask ---------------------------------------------------------------
-
-NullSpaceJointLimitTask::NullSpaceJointLimitTask(std::shared_ptr<Task> primary,
-                                                 std::vector<std::string> joints)
-    : Task(0, 1.0), primary_(std::move(primary)), names_(std::move(joints)) {}
-
-Status NullSpaceJointLimitTask::set_settings(NullSpaceSettings settings) {
-    if (Status s = check_settings(settings); !s) return s;
-    settings_ = settings;
-    return {};
-}
-
-Status NullSpaceJointLimitTask::set_band(double band) {
-    if (!std::isfinite(band) || band <= 0)
-        return make_error(ErrorCode::invalid_argument, "null-space joint limit: band must be > 0");
-    band_ = band;
-    return {};
-}
-
-Status NullSpaceJointLimitTask::set_rate(double rate) {
-    if (!std::isfinite(rate) || rate <= 0)
-        return make_error(ErrorCode::invalid_argument, "null-space joint limit: rate must be > 0");
-    rate_ = rate;
-    return {};
-}
-
-Status NullSpaceJointLimitTask::set_limits(const Eigen::Ref<const Eigen::VectorXd>& lower,
-                                           const Eigen::Ref<const Eigen::VectorXd>& upper) {
-    if (lower.size() != upper.size() || (bound() && lower.size() != static_cast<Index>(indices_.size())))
-        return make_error(ErrorCode::invalid_argument,
-                          "null-space joint limit: one lower and upper limit per joint required");
-    if (lower.array().isNaN().any() || upper.array().isNaN().any())
-        return make_error(ErrorCode::invalid_argument, "null-space joint limit: limits must not be NaN");
-    lower_ = lower;
-    upper_ = upper;
-    return {};
-}
-
-Status NullSpaceJointLimitTask::on_bind(const Model& model) {
-    if (Status s = check_primary(primary_, this, this->model(), "null-space joint limit"); !s) return s;
-    if (Status s = resolve_scalar(model, names_, true, "null-space joint limit", joints_, indices_); !s)
-        return s;
-    const auto k = static_cast<Index>(indices_.size());
-    const double inf = std::numeric_limits<double>::infinity();
-    if (lower_.size() == 0) {
-        lower_.setConstant(k, -inf);
-        upper_.setConstant(k, inf);
-    }
-    if (lower_.size() != k)
-        return make_error(ErrorCode::invalid_argument,
-                          "null-space joint limit: one lower and upper limit per joint required");
-    push_.setZero(k);
-    return resize_rows(k);
-}
-
-Status NullSpaceJointLimitTask::compute(const Tick& tick, Eigen::Ref<Eigen::MatrixXd> J,
-                                        Eigen::Ref<Eigen::VectorXd> e) {
-    activation_ = 0;
-    if (Status s = primary_->evaluate(tick); !s) return s;
-    const Model& m = *model();
-    const Eigen::VectorXd& q = tick.workspace.q();
-    const auto k = static_cast<Index>(indices_.size());
-    push_.setZero();
-    for (Index c = 0; c < k; ++c) {
-        const JointInfo& j = m.joints()[joints_[static_cast<std::size_t>(c)]];
-        double lo = -std::numeric_limits<double>::infinity(), hi = std::numeric_limits<double>::infinity();
-        if (m.has_position_limit(j.id)) {
-            lo = m.lower_position_limit()[j.idx_q];
-            hi = m.upper_position_limit()[j.idx_q];
-        }
-        if (std::isfinite(lower_[c])) lo = std::max(lo, lower_[c]);
-        if (std::isfinite(upper_[c])) hi = std::min(hi, upper_[c]);
-        if (!(std::isfinite(lo) && std::isfinite(hi)) || hi >= 1e20 || hi <= lo + 1e-10) continue;
-        const double pos = q[j.idx_q];
-        const double down = pos - lo, up = hi - pos;
-        const double margin = std::min(down, up);
-        const double act = std::clamp((band_ - margin) / band_, 0.0, 1.0);
-        if (act <= 0) continue;
-        push_[c] = (down < up ? -1.0 : 1.0) * act * rate_ * tick.dt;
-        activation_ = std::max(activation_, act);
-    }
-    if (activation_ <= 0) return {};
-    if (Status s = null_space_projector(*primary_, indices_, settings_.damping, settings_.threshold,
-                                        projector_, scratch_);
-        !s)
-        return s;
-    // The strongest activation scales the whole task (equivalent to scaling its row weights).
-    e.noalias() = activation_ * projector_ * push_;
-    for (Index c = 0; c < k; ++c)
-        J.col(indices_[static_cast<std::size_t>(c)]) = activation_ * projector_.col(c);
     return {};
 }
 

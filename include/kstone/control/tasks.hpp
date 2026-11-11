@@ -170,37 +170,6 @@ class KSTONE_EXPORT NullSpacePostureTask final : public Task {
     NullSpaceScratch scratch_;
 };
 
-/// Push scalar joints away from their position limits inside the primary null space. Rows are
-/// active within `band` of a limit; the weight scales with the strongest activation.
-class KSTONE_EXPORT NullSpaceJointLimitTask final : public Task {
-  public:
-    NullSpaceJointLimitTask(std::shared_ptr<Task> primary, std::vector<std::string> joints = {});
-
-    Status set_settings(NullSpaceSettings settings);
-    Status set_band(double band);
-    /// Push speed in rad/s (or m/s) at full activation, > 0.
-    Status set_rate(double rate);
-    /// Override limits per selected joint; non-finite entries keep the model limit.
-    Status set_limits(const Eigen::Ref<const Eigen::VectorXd>& lower,
-                      const Eigen::Ref<const Eigen::VectorXd>& upper);
-    /// Largest activation in [0, 1] at the last evaluation.
-    double activation() const noexcept { return activation_; }
-
-  private:
-    Status on_bind(const Model& model) override;
-    Status compute(const Tick& tick, Eigen::Ref<Eigen::MatrixXd> J, Eigen::Ref<Eigen::VectorXd> e) override;
-
-    std::shared_ptr<Task> primary_;
-    std::vector<std::string> names_;
-    std::vector<JointId> joints_;
-    std::vector<Index> indices_;
-    Eigen::VectorXd lower_, upper_, push_;
-    NullSpaceSettings settings_;
-    double band_{0.2}, rate_{1.0}, activation_{0.0};
-    Eigen::MatrixXd projector_;
-    NullSpaceScratch scratch_;
-};
-
 /// Climb the manipulability of `preference` inside the primary null space.
 class KSTONE_EXPORT NullSpaceManipulabilityTask final : public Task {
   public:
