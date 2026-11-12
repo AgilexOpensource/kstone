@@ -17,7 +17,7 @@
 
 配置放在 `chassis:` 子对象里：
 
-- `kinematics`：`omni` 或 `differential`。
+- `kinematics`：`omni` 或 `differential`。不可调，可从 `Module.properties` 读取。
 - `base_frame`：控制中心所在 frame，默认 `base_link`。
 - `max_linear_velocity`、`max_angular_velocity` 及对应的 `*_acceleration`、`*_deceleration`、`*_reversal_deceleration`、`*_jerk`：上限。速度模式直接用这些值，位姿模式的初始限制也取它们。
 - `position_tolerance`、`orientation_tolerance`：到达判定，默认 0.01 m、0.02 rad。

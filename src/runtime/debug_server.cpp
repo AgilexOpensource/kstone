@@ -559,6 +559,7 @@ struct DebugServer::Impl {
                 node.set("params", m->tunables());
                 node.set("tune_schema", std::move(schema));
             }
+            if (ConfigNode props = m->properties(); !props.is_null()) node.set("properties", std::move(props));
             ConfigNode list = ConfigNode::list();
             for (const PortInfo& p : m->ports()) {
                 ConfigNode port = ConfigNode::map();

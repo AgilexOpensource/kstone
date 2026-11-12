@@ -560,6 +560,7 @@ TEST_CASE("debug server: tune op and model params") {
     CHECK(arm->find("tunable")->as_bool());
     CHECK(arm->find("params")->find("gain") != nullptr);
     CHECK(arm->find("tune_schema")->kind() == ConfigNode::Kind::map);
+    CHECK(arm->find("properties") == nullptr);
 
     std::atomic<bool> stop{false};
     std::thread runner([&] { CHECK(e->run(0.0, &stop)); });

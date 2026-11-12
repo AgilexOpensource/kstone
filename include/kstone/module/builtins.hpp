@@ -537,6 +537,8 @@ class KSTONE_EXPORT ChassisModule final : public Module {
     Status tune(const ConfigNode& params) override;
     ConfigNode tunables() const override;
     ConfigNode tune_schema() const override;
+    /// {kinematics: omni | differential}.
+    ConfigNode properties() const override;
 
     Status configure(ModuleSetup& setup) override;
     Status prepare(Cycle& cycle) override;

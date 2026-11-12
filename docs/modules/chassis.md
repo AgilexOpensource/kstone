@@ -17,7 +17,7 @@ Both ports lapse after `command_timeout_s`. The last one written is submitted on
 
 Config lives in the `chassis:` sub-object:
 
-- `kinematics`: `omni` or `differential`.
+- `kinematics`: `omni` or `differential`. Not tunable; read it from `Module.properties`.
 - `base_frame`: frame of the control centre, default `base_link`.
 - `max_linear_velocity`, `max_angular_velocity` and the matching `*_acceleration`, `*_deceleration`, `*_reversal_deceleration`, `*_jerk`: limits. Velocity mode uses them directly, and they seed the initial pose-mode limits.
 - `position_tolerance`, `orientation_tolerance`: arrival check, default 0.01 m and 0.02 rad.

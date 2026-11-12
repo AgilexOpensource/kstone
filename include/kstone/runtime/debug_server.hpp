@@ -36,7 +36,8 @@ struct DebugServerOptions {
 ///   hello  {version, client, auth_required, capabilities}  on connect; capabilities lists the
 ///          optional ops this server accepts (asset only when it serves assets);
 ///   model  {urdf, assets, rate_hz, publish_hz, nq, nv, joints, mimics, modules, solver, stats}  once authenticated; each module has
-///          {id, type, ports, homeable, tunable, visuals, outputs} plus {params, tune_schema} when tunable;
+///          {id, type, ports, homeable, tunable, visuals, outputs} plus {params, tune_schema} when tunable
+///          and properties (Module::properties) when not null;
 ///          visuals [{name, frame ("" = world), shape {type, size, vertices? (convex)}}];
 ///          outputs [{name, type (number|flag|point|segment|polygon|visuals), size? (polygon, visuals),
 ///          role (value|margin|boundary|warning|alert, see OutputRole), unit? (SI symbol)}];

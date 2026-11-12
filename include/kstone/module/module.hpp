@@ -275,6 +275,8 @@ class KSTONE_EXPORT Module {
     virtual ConfigNode tunables() const { return {}; }
     /// JSON Schema of tune(); defaults are the construction values. Null if the module has none.
     virtual ConfigNode tune_schema() const { return {}; }
+    /// Fixed configuration facts a client may need (e.g. chassis kinematics) as a map; null if none.
+    virtual ConfigNode properties() const { return {}; }
 
   protected:
     /// `index` is in range of ports().

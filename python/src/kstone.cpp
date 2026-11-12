@@ -761,6 +761,9 @@ Example:
         .def_property_readonly(
             "tune_schema", [](const PyModule& s) { return to_py(s.module->tune_schema()); },
             "JSON Schema of the tune() parameters, or None.")
+        .def_property_readonly(
+            "properties", [](const PyModule& s) { return to_py(s.module->properties()); },
+            "Fixed configuration facts such as chassis kinematics, or None.")
         .def(
             "tune",
             [](const PyModule& s, const py::dict& params) {

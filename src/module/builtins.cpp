@@ -1603,6 +1603,11 @@ Status ChassisModule::tune(const ConfigNode& params) {
 
 ConfigNode ChassisModule::tunables() const { return builtin_schemas::chassis().values(config_); }
 ConfigNode ChassisModule::tune_schema() const { return builtin_schemas::chassis().tune_schema(defaults_); }
+ConfigNode ChassisModule::properties() const {
+    ConfigNode node = ConfigNode::map();
+    node.set("kinematics", to_string(config_.chassis.kinematics));
+    return node;
+}
 
 Status ChassisModule::configure(ModuleSetup& setup) {
     const Model& model = *setup.model();

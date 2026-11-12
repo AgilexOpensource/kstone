@@ -38,6 +38,7 @@ schema 里标 `tunable: true` 的字段可在运行时修改：
 
 - `Module.tune(dict)` 只改给出的键，嵌套对象可只给部分子键；整次调用是原子的，任一项校验失败都不改动。
 - `Module.params()` 返回当前可调参数，`Module.tune_schema` 返回可调部分的 schema。
+- `Module.properties` 返回客户端可能需要的固定配置信息，没有则为 None。目前只有 chassis 提供：`{kinematics}`。调试协议的 `model` 里对应字段为 `properties`。
 - 调试协议的 `tune` 与之等价。
 - 求解器和关节限位在引擎层调：`Engine.tune_solver`、`Engine.tune_joint_limits`。
 

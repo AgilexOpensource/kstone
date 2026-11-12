@@ -1082,6 +1082,7 @@ TEST_CASE("chassis module: locks the root and writes the controller pose") {
     cc.period_s = 0.02;
     auto ch = std::make_shared<ChassisModule>("chassis", cc);
     CHECK(ch->controller() == nullptr);
+    CHECK(ch->properties().find("kinematics")->as_string() == "differential");
     FrameTargetModuleConfig fc;
     fc.frame = "tool";
     fc.joints = {"lift_joint", "shoulder_yaw_joint", "shoulder_pitch_joint", "elbow_joint"};

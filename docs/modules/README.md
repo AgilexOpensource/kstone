@@ -38,6 +38,7 @@ Fields marked `tunable: true` in the schema can be changed at runtime:
 
 - `Module.tune(dict)` changes only the given keys, and nested objects may give only some sub-keys. A call is atomic: if any item fails validation, nothing changes.
 - `Module.params()` returns the current tunable values. `Module.tune_schema` returns the schema of the tunable part.
+- `Module.properties` returns fixed configuration facts a client may need, or None. Only chassis has them so far: `{kinematics}`. The debug protocol's `model` carries them as `properties`.
 - The debug protocol's `tune` is equivalent.
 - The solver and joint limits are tuned on the engine: `Engine.tune_solver`, `Engine.tune_joint_limits`.
 
