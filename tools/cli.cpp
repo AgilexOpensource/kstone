@@ -93,7 +93,10 @@ bool parse_endpoint(const std::string& text, kstone::DebugServerOptions& out) {
 int kstone_cli_main(int argc, char** argv) {
     if (argc < 2) return usage(stderr);
     const std::string command = argv[1];
-    if (command == "-h" || command == "--help") return usage(stdout);
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "-h" || arg == "--help") return usage(stdout);
+    }
     if (command == "--version") {
         std::printf("kstone %s\n", kstone::library_version_string());
         return 0;

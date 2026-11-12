@@ -9,6 +9,8 @@ import numpy as np
 
 import kstone
 
+if len(sys.argv) != 2:
+    sys.exit("usage: python examples/python/ik.py <arm.urdf>")
 urdf = pathlib.Path(sys.argv[1]).resolve()
 config = f"""
 model: {{file: {urdf.name}}}
