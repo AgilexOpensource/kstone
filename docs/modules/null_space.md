@@ -9,7 +9,7 @@ Applies a preference in the null space of a frame_target (`primary`) without aff
 - `primary`: id of the frame_target, which also becomes a dependency. With `joints` empty, the scalar joints driven by primary are used.
 - `preference`:
   - `posture`: stay close to a reference posture.
-  - `manipulability`: raise manipulability; `manipulability_axes` selects the directions (translation only by default).
+  - `manipulability`: raise manipulability; `manipulability_axes` selects the directions as 6 entries (linear; angular) of 0 or 1, all 6 by default.
 - `reference` (the posture baseline):
   - `initial` (default): the initial q.
   - `current`: the current q each cycle, which only damps null-space motion.
@@ -20,7 +20,8 @@ Applies a preference in the null space of a frame_target (`primary`) without aff
   - Tuning only `reference` to `custom` takes the configured `posture`, or the current q when none is configured, then applies `posture_values`.
   - Switching to `initial` / `neutral` / `current` clears `posture_values`.
   - `reseed_current: true` (tune only) stores the current q as the custom posture and selects the posture preference.
-- `posture_weight`, `manipulability_weight`: weights of each preference. `posture_velocity_scale` caps the speed of returning to the posture, in (0, 1].
+- `posture_weight` (default 1), `manipulability_weight` (default 0.1): weights of each preference. `posture_velocity_scale` caps the speed of returning to the posture, in (0, 1].
+- `manipulability_rate`: rate at which 0.5·log det of the manipulability Gram matrix should rise, per second, default 1. Set at load only.
 - `projector.damping` / `threshold`: null-space projector damping; threshold > 0 enables adaptive damping.
 
 ## Example

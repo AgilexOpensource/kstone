@@ -9,7 +9,7 @@
 - `primary`：frame_target 的 id，同时是本模块的依赖。`joints` 为空时取 primary 驱动的标量关节。
 - `preference`：
   - `posture`：靠近参考姿态。
-  - `manipulability`：提高可操作度，`manipulability_axes` 选参与的方向（默认只看平移）。
+  - `manipulability`：提高可操作度，`manipulability_axes` 选参与的方向，6 个 0 或 1（先平移后旋转），默认 6 个全选。
 - `reference`（posture 的基准）：
   - `initial`（默认）：初始 q。
   - `current`：每周期的当前 q，相当于只阻尼零空间运动。
@@ -20,7 +20,8 @@
   - 只把 `reference` 调成 `custom` 时，取配置的 `posture`；没配置就取当前 q；再叠加 `posture_values`。
   - 切到 `initial` / `neutral` / `current` 会清空 `posture_values`。
   - `reseed_current: true`（仅 tune）把当前 q 设为 custom 姿态并选中 posture 偏好。
-- `posture_weight`、`manipulability_weight`：各偏好的权重。`posture_velocity_scale` 限制回到姿态的速度，取值 (0, 1]。
+- `posture_weight`（默认 1）、`manipulability_weight`（默认 0.1）：各偏好的权重。`posture_velocity_scale` 限制回到姿态的速度，取值 (0, 1]。
+- `manipulability_rate`：可操作度 Gram 矩阵的 0.5·log det 每秒期望上升量，默认 1，只能在加载时设置。
 - `projector.damping` / `threshold`：零空间投影的阻尼，threshold > 0 启用自适应阻尼。
 
 ## 示例

@@ -268,3 +268,36 @@ TEST_CASE("models: omni dual arm, lexicographic with one frame task per level") 
 TEST_CASE("models: omni dual arm, lexicographic with both frame tasks on one level") {
     run_dual_arm(SolveMode::lexicographic, false);
 }
+
+TEST_CASE("models: manipulability gradient matches finite differences") {
+    std::mt19937 rng(11);
+    Eigen::Matrix<double, 6, 1> linear, mixed;
+    linear << 1, 1, 1, 0, 0, 0;
+    mixed << 1, 0, 1, 0, 1, 1;
+    const Eigen::Matrix<double, 6, 1> all = Eigen::Matrix<double, 6, 1>::Ones();
+    for (const Case* c : {&kOmni, &kDiff, &kFloat}) {
+        for (const auto& axes : {all, linear, mixed}) {
+            INFO(std::string(c->file));
+            auto m = load(*c);
+            ManipulabilityTask task(c->tool, {}, axes);
+            REQUIRE(task.bind(m));
+            for (int trial = 0; trial < 3; ++trial) {
+                const Eigen::VectorXd q = random_q(m, rng);
+                double f = 0;
+                Eigen::VectorXd g;
+                REQUIRE(task.measure(q, f, &g));
+                constexpr double h = 1e-6;
+                Eigen::VectorXd qe(m->nq());
+                for (const Index i : task.indices()) {
+                    CAPTURE(i);
+                    double fp = 0, fm = 0;
+                    REQUIRE(m->integrate(q, Eigen::VectorXd::Unit(m->nv(), i) * h, qe));
+                    REQUIRE(task.measure(qe, fp, nullptr));
+                    REQUIRE(m->integrate(q, Eigen::VectorXd::Unit(m->nv(), i) * -h, qe));
+                    REQUIRE(task.measure(qe, fm, nullptr));
+                    CHECK(g[i] == doctest::Approx((fp - fm) / (2 * h)).epsilon(1e-5).scale(1.0));
+                }
+            }
+        }
+    }
+}

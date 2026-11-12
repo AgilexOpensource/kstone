@@ -102,7 +102,8 @@ class KSTONE_EXPORT GazeTask final : public Task {
 };
 
 /// Increase the manipulability f = 0.5 log det(S S^T + r^2 I) of a frame (1 row), where S holds
-/// the selected local Jacobian axes and joint columns. The gradient is a central finite difference.
+/// the selected local Jacobian axes and joint columns. The gradient is analytic on serial chains of
+/// one-dof joints and a central finite difference otherwise.
 class KSTONE_EXPORT ManipulabilityTask final : public Task {
   public:
     /// axes: 6 entries in {0, 1} selecting (linear; angular) rows. Empty joints selects all scalar joints.
@@ -128,10 +129,13 @@ class KSTONE_EXPORT ManipulabilityTask final : public Task {
     std::vector<std::string> names_;
     FrameId frame_{0};
     std::vector<Index> indices_;
+    std::vector<Index> q_indices_;  ///< q coordinate of each index when nq == 1, else -1.
+    std::vector<char> in_chain_;    ///< Whether each index moves the frame.
+    bool analytic_{false};
     Eigen::Matrix<double, 6, 1> axes_;
-    double rate_{0.1}, regularization_{0.01};
+    double rate_{1.0}, regularization_{0.01};
     std::unique_ptr<Workspace> probe_;
-    Eigen::MatrixXd jac_, selected_, gram_;
+    Eigen::MatrixXd jac_, selected_, gram_, weights_;
     Eigen::LLT<Eigen::MatrixXd> llt_;
     Eigen::VectorXd step_, shifted_, gradient_, q0_;
 };

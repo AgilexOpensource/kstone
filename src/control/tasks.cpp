@@ -1,6 +1,8 @@
 #include "kstone/control/tasks.hpp"
+#include "kstone/model/pinocchio.hpp"
 
 #include <Eigen/Cholesky>
+#include <pinocchio/algorithm/frames.hpp>
 #include <pinocchio/spatial/explog.hpp>
 #include <pinocchio/spatial/se3.hpp>
 
@@ -313,9 +315,31 @@ Status ManipulabilityTask::on_bind(const Model& model) {
     frame_ = *id;
     std::vector<JointId> joints;
     if (Status s = resolve_scalar(model, names_, "manipulability", joints, indices_); !s) return s;
+    q_indices_.clear();
+    for (const JointId j : joints) {
+        const JointInfo& info = model.joints()[j];
+        q_indices_.push_back(info.nq == 1 ? info.idx_q : -1);
+    }
+    // Analytic if each selected chain joint has a fixed axis and no mimic joint couples columns.
+    const pinocchio::Model& pin = pinocchio_model(model);
+    in_chain_.assign(indices_.size(), 0);
+    analytic_ = true;
+    for (const auto jid : pin.supports[pin.frames[frame_].parentJoint]) {
+        if (jid == 0) continue;
+        const auto& joint = pin.joints[jid];
+        const std::string kind = joint.shortname();
+        if (kind.rfind("JointModelMimic", 0) == 0) analytic_ = false;
+        const auto it = std::find(indices_.begin(), indices_.end(), static_cast<Index>(joint.idx_v()));
+        if (it == indices_.end() || joint.nv() != 1) continue;
+        in_chain_[static_cast<std::size_t>(it - indices_.begin())] = 1;
+        const bool fixed_axis = kind.rfind("JointModelR", 0) == 0 || kind.rfind("JointModelP", 0) == 0 ||
+                                kind.rfind("JointModelH", 0) == 0;
+        if (!fixed_axis) analytic_ = false;
+    }
     probe_ = std::make_unique<Workspace>(this->model());
     jac_.setZero(6, model.nv());
     const auto rows = static_cast<Index>(axes_.sum());
+    weights_.setZero(rows, static_cast<Index>(indices_.size()));
     selected_.setZero(rows, static_cast<Index>(indices_.size()));
     gram_.setIdentity(rows, rows);
     llt_.compute(gram_);  // sizes the factorization buffers
@@ -327,8 +351,11 @@ Status ManipulabilityTask::on_bind(const Model& model) {
 }
 
 Status ManipulabilityTask::value_at(const Eigen::Ref<const Eigen::VectorXd>& q, double& value) {
-    if (Status s = probe_->update(q); !s) return s;
-    if (Status s = probe_->frame_jacobian(frame_, ReferenceFrame::local, jac_); !s) return s;
+    // Only the frame's support chain is evaluated; a full Workspace::update costs several times more.
+    const pinocchio::Model& pin = pinocchio_model(*model());
+    jac_.setZero();
+    if (pin.frames[frame_].parentJoint != 0)
+        pinocchio::computeFrameJacobian(pin, pinocchio_data(*probe_), q, frame_, pinocchio::LOCAL, jac_);
     Index row = 0;
     for (Index a = 0; a < 6; ++a) {
         if (axes_[a] == 0.0) continue;
@@ -354,10 +381,47 @@ Status ManipulabilityTask::measure(const Eigen::Ref<const Eigen::VectorXd>& q, d
     const Eigen::VectorXd& q0 = q0_;
     if (Status s = value_at(q0, value); !s) return s;
     if (!gradient) return {};
-    constexpr double h = 1e-5;
     gradient->setZero(model()->nv());
-    for (const Index i : indices_) {
+    if (analytic_) {
+        // df/dq_i = <G^-1 S, dS/dq_i>; for j before i on the chain dJ_j/dq_i = ad(J_j) J_i (LOCAL).
+        weights_ = llt_.solve(selected_);
+        const auto k = static_cast<Index>(indices_.size());
+        for (Index c = 0; c < k; ++c) {
+            if (!in_chain_[static_cast<std::size_t>(c)]) continue;
+            const Index i = indices_[static_cast<std::size_t>(c)];
+            const Eigen::Vector3d vi = jac_.col(i).head<3>(), wi = jac_.col(i).tail<3>();
+            double g = 0;
+            for (Index d = 0; d < k; ++d) {
+                const Index j = indices_[static_cast<std::size_t>(d)];
+                if (!in_chain_[static_cast<std::size_t>(d)] || j >= i) continue;
+                const Eigen::Vector3d vj = jac_.col(j).head<3>(), wj = jac_.col(j).tail<3>();
+                Eigen::Matrix<double, 6, 1> dj;
+                dj << wj.cross(vi) + vj.cross(wi), wj.cross(wi);
+                Index row = 0;
+                for (Index a = 0; a < 6; ++a) {
+                    if (axes_[a] == 0.0) continue;
+                    g += weights_(row++, d) * dj[a];
+                }
+            }
+            (*gradient)[i] = g;
+        }
+        return {};
+    }
+    constexpr double h = 1e-5;
+    shifted_ = q0;
+    for (std::size_t c = 0; c < indices_.size(); ++c) {
+        const Index i = indices_[c];
         double plus = 0, minus = 0;
+        if (const Index qi = q_indices_[c]; qi >= 0) {
+            // Same result as integrate for nq == 1 joints, without a whole-model pass.
+            shifted_[qi] = q0[qi] + h;
+            if (Status s = value_at(shifted_, plus); !s) return s;
+            shifted_[qi] = q0[qi] - h;
+            if (Status s = value_at(shifted_, minus); !s) return s;
+            shifted_[qi] = q0[qi];
+            (*gradient)[i] = (plus - minus) / (2 * h);
+            continue;
+        }
         step_.setZero();
         step_[i] = h;
         if (Status s = model()->integrate(q0, step_, shifted_); !s) return s;
@@ -365,6 +429,7 @@ Status ManipulabilityTask::measure(const Eigen::Ref<const Eigen::VectorXd>& q, d
         step_[i] = -h;
         if (Status s = model()->integrate(q0, step_, shifted_); !s) return s;
         if (Status s = value_at(shifted_, minus); !s) return s;
+        shifted_ = q0;
         (*gradient)[i] = (plus - minus) / (2 * h);
     }
     return {};

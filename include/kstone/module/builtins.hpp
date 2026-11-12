@@ -343,10 +343,9 @@ struct NullSpaceModuleConfig {
     double posture_weight{1.0};
     double posture_velocity_scale{0.8};
 
-    double manipulability_weight{1.0};
-    double manipulability_rate{0.1};
-    Eigen::Matrix<double, 6, 1> manipulability_axes{
-        (Eigen::Matrix<double, 6, 1>() << 1, 1, 1, 0, 0, 0).finished()};
+    double manipulability_weight{0.1};
+    double manipulability_rate{1.0};
+    Eigen::Matrix<double, 6, 1> manipulability_axes{Eigen::Matrix<double, 6, 1>::Ones()};
 };
 
 /// One of two null-space preferences under a frame task; switchable at runtime without allocation.
