@@ -12,6 +12,7 @@
   <buildtool_depend>cmake</buildtool_depend>
   <depend>eigen</depend>
   <depend>pinocchio</depend>
+  <depend>libqhull</depend>
 
   <export>
     <build_type>cmake</build_type>

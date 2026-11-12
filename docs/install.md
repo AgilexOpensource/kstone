@@ -12,7 +12,7 @@
 | Coal | ≥ 3.0.3 |
 | Eigen | ≥ 3.4 |
 
-DAQP, Ruckig, yaml-cpp and doctest are bundled as submodules, and convex hulls of collision meshes use Coal (qhull) when available, with a built-in fallback, so Coal does not need qhull. `pip install` (see the [README](../README.md#install)) takes Pinocchio and Coal from pip wheels; the sections below cover ROS and source builds.
+DAQP, Ruckig, yaml-cpp and doctest are bundled as submodules, and convex hulls of collision meshes use Coal when it was built with qhull and otherwise call qhull directly. CMake checks which Coal it found: with the pip wheels (built with qhull) kstone needs nothing extra, while a Coal without qhull, such as ROS Humble's apt package or the source build below, needs `libqhull-dev`. `pip install` (see the [README](../README.md#install)) takes Pinocchio and Coal from pip wheels; the sections below cover ROS and source builds.
 
 CI tests Ubuntu 22.04 on x86_64 and aarch64 with Python 3.10 and ROS 2 Humble. Other Ubuntu versions, architectures and Python versions are not tested yet.
 
@@ -61,7 +61,7 @@ So a sourced ROS wins over a venv, and a venv is used when no usable ROS or sour
 Tested with ROS 2 Humble, which has `ros-humble-pinocchio` 4.0.0 and `ros-humble-coal` 3.0.3.
 
 ```bash
-sudo apt install ros-humble-pinocchio
+sudo apt install ros-humble-pinocchio libqhull-dev
 source /opt/ros/humble/setup.bash
 
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -73,7 +73,7 @@ ctest --test-dir build
 
 ### In a colcon workspace
 
-The [package.xml](../package.xml) declares kstone as a `cmake` build type package that depends on `pinocchio` and `eigen`, so `rosdep` installs them and colcon builds kstone like any other package. The library does not depend on ROS. The [README](../README.md#ros-2) has the commands. A package that uses kstone adds:
+The [package.xml](../package.xml) declares kstone as a `cmake` build type package that depends on `pinocchio`, `eigen` and `libqhull`, so `rosdep` installs them and colcon builds kstone like any other package. The library does not depend on ROS. The [README](../README.md#ros-2) has the commands. A package that uses kstone adds:
 
 ```xml
 <depend>kstone</depend>

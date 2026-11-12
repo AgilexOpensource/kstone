@@ -1,4 +1,4 @@
-// Built-in quickhull: closed, outward-oriented and containing every input point.
+// qhull-based hull: closed, outward-oriented and containing every input point.
 #include "hull.hpp"
 
 #include <Eigen/Geometry>
@@ -65,6 +65,29 @@ TEST_CASE("convex hull: coplanar and duplicate points collapse to the corners") 
     CHECK(hull->vertices.cols() == 8);
     CHECK(hull->triangles.size() == 12);
     check_hull(*hull, p);
+}
+
+// Finely tessellated CAD-style rings with sub-micron noise: nearly coplanar facets everywhere.
+TEST_CASE("convex hull: near-coplanar tessellated rings") {
+    for (unsigned seed = 0; seed < 5; ++seed) {
+        std::mt19937 rng(seed);
+        std::uniform_real_distribution<double> u(-1e-9, 1e-9);
+        const int n = 360;
+        Eigen::Matrix3Xd p(3, 4 * n);
+        for (int i = 0; i < n; ++i) {
+            const double a = 2.0 * M_PI * i / n;
+            for (int r = 0; r < 4; ++r) {
+                const double radius = r < 2 ? 0.05 : 0.03;
+                const double z = (r % 2) * 0.1 + (r >= 2 ? 0.02 : 0.0);
+                p.col(4 * i + r) = Eigen::Vector3d(radius * std::cos(a) + u(rng),
+                                                   radius * std::sin(a) + u(rng), z + u(rng));
+            }
+        }
+        p = Eigen::AngleAxisd(0.3 + seed, Eigen::Vector3d(1, 2, 3).normalized()).toRotationMatrix() * p;
+        auto hull = convex_hull(p);
+        REQUIRE(hull);
+        check_hull(*hull, p);
+    }
 }
 
 TEST_CASE("convex hull: degenerate input is rejected") {

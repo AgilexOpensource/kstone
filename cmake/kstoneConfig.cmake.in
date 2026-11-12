@@ -4,9 +4,12 @@ include(CMakeFindDependencyMacro)
 find_dependency(Eigen3 CONFIG)
 find_dependency(Threads)
 if(@KSTONE_CONFIG_STATIC@)
-  # A static libkstone carries Pinocchio's symbols as unresolved references.
+  # A static libkstone carries Pinocchio's and qhull's symbols as unresolved references.
   set(Boost_NO_WARN_NEW_VERSIONS ON)
   find_dependency(pinocchio CONFIG)
+  if(@KSTONE_HAS_QHULL@)
+    find_dependency(Qhull CONFIG)
+  endif()
 endif()
 
 include(${CMAKE_CURRENT_LIST_DIR}/kstoneTargets.cmake)

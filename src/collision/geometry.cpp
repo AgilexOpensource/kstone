@@ -1,4 +1,6 @@
+#ifdef KSTONE_HAS_QHULL
 #include "hull.hpp"
+#endif
 #include "internal.hpp"
 #include <cmath>
 #include <exception>
@@ -71,7 +73,7 @@ Status validate(const Shape& shape) {
 namespace collision_detail {
 namespace {
 
-// Null when Coal was built without qhull or rejects the points; the built-in hull then decides.
+// Null when Coal was built without qhull or rejects the points; kstone's own qhull call, if built, then decides.
 std::shared_ptr<coal::ConvexBase> coal_hull(const Eigen::Matrix3Xd& vertices) {
     const auto n = static_cast<unsigned int>(vertices.cols());
     auto points = std::make_shared<std::vector<coal::Vec3s>>(n);
@@ -85,6 +87,11 @@ std::shared_ptr<coal::ConvexBase> coal_hull(const Eigen::Matrix3Xd& vertices) {
 }
 
 Result<std::shared_ptr<coal::ConvexBase>> builtin_hull(const Eigen::Matrix3Xd& vertices) {
+#ifndef KSTONE_HAS_QHULL
+    // Built only against a Coal with qhull, whose rejection means the points span no volume.
+    static_cast<void>(vertices);
+    return make_error(ErrorCode::invalid_argument, "convex hull is degenerate");
+#else
     auto hull = convex_hull(vertices);
     if (!hull) return std::move(hull).error();
     const auto np = static_cast<unsigned int>(hull->vertices.cols());
@@ -100,6 +107,7 @@ Result<std::shared_ptr<coal::ConvexBase>> builtin_hull(const Eigen::Matrix3Xd& v
     }
     return std::shared_ptr<coal::ConvexBase>(
         std::make_shared<coal::Convex<coal::Triangle>>(std::move(points), np, std::move(triangles), nt));
+#endif
 }
 
 }  // namespace

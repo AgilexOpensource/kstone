@@ -24,7 +24,6 @@ add_library(kstone
   motion/joint_trajectory.cpp
   motion/pose_trajectory.cpp
   collision/geometry.cpp
-  collision/hull.cpp
   collision/model.cpp
   collision/world.cpp
   collision/query.cpp
@@ -81,6 +80,11 @@ target_include_directories(kstone PUBLIC
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 # Public headers need only Eigen; Pinocchio stays an implementation detail (see kstone/model/pinocchio.hpp).
 target_link_libraries(kstone PUBLIC Eigen3::Eigen PRIVATE pinocchio::pinocchio Threads::Threads ${CMAKE_DL_LIBS})
+if(KSTONE_HAS_QHULL)
+  target_sources(kstone PRIVATE collision/hull.cpp)
+  target_link_libraries(kstone PRIVATE Qhull::qhull_r)
+  target_compile_definitions(kstone PRIVATE KSTONE_HAS_QHULL)
+endif()
 target_include_directories(kstone SYSTEM PRIVATE ${KSTONE_THIRD_PARTY_DIR}/daqp/include
   ${KSTONE_THIRD_PARTY_DIR}/ruckig/include
   ${KSTONE_THIRD_PARTY_DIR}/yaml-cpp/include)

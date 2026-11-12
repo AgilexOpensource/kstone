@@ -12,7 +12,7 @@
 | Coal | ≥ 3.0.3 |
 | Eigen | ≥ 3.4 |
 
-DAQP、Ruckig、yaml-cpp、doctest 以子模块形式内置；碰撞网格的凸包优先用 Coal（qhull）计算，不可用时用内置实现兜底，所以 Coal 不需要 qhull。`pip install`（见 [README](../../README.zh-CN.md#安装)）从 pip wheel 获取 Pinocchio 和 Coal；下面几节介绍 ROS 和源码编译。
+DAQP、Ruckig、yaml-cpp、doctest 以子模块形式内置；碰撞网格的凸包在 Coal 带 qhull 时由 Coal 计算，否则 kstone 直接调用 qhull。CMake 会检查找到的 Coal：用 pip wheel（自带 qhull）时无需额外安装；Coal 不带 qhull 时（如 ROS Humble 的 apt 包或下面的源码编译）需要 `libqhull-dev`。`pip install`（见 [README](../../README.zh-CN.md#安装)）从 pip wheel 获取 Pinocchio 和 Coal；下面几节介绍 ROS 和源码编译。
 
 CI 只测试 Ubuntu 22.04 x86_64 和 aarch64、Python 3.10 和 ROS 2 Humble，其他 Ubuntu 版本、架构和 Python 版本暂未测试。
 
@@ -63,7 +63,7 @@ python3 -m pip install --no-build-isolation "git+https://github.com/AgilexOpenso
 已测试 ROS 2 Humble： `ros-humble-pinocchio` 4.0.0、`ros-humble-coal` 3.0.3。
 
 ```bash
-sudo apt install ros-humble-pinocchio
+sudo apt install ros-humble-pinocchio libqhull-dev
 source /opt/ros/humble/setup.bash
 
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -75,7 +75,7 @@ ctest --test-dir build
 
 ### 在 colcon 工作区中
 
-[package.xml](../../package.xml) 把 kstone 声明为 `cmake` 构建类型的包，依赖 `pinocchio` 和 `eigen`，因此 `rosdep` 会装好依赖，colcon 像构建其他包一样构建 kstone。库本身不依赖 ROS。命令见 [README](../../README.zh-CN.md#ros-2)。使用 kstone 的包加上：
+[package.xml](../../package.xml) 把 kstone 声明为 `cmake` 构建类型的包，依赖 `pinocchio`、`eigen` 和 `libqhull`，因此 `rosdep` 会装好依赖，colcon 像构建其他包一样构建 kstone。库本身不依赖 ROS。命令见 [README](../../README.zh-CN.md#ros-2)。使用 kstone 的包加上：
 
 ```xml
 <depend>kstone</depend>

@@ -45,7 +45,7 @@ A package in the same workspace adds `<depend>kstone</depend>` and uses `find_pa
 Build Pinocchio and Coal from source, then kstone, all into one prefix:
 
 ```bash
-sudo apt install build-essential cmake git libboost-all-dev libeigen3-dev liburdfdom-dev libassimp-dev
+sudo apt install build-essential cmake git libboost-all-dev libeigen3-dev liburdfdom-dev libassimp-dev libqhull-dev
 PREFIX=$HOME/opt/kstone
 
 git clone --recursive --depth 1 --branch v3.0.3 https://github.com/coal-library/coal.git
@@ -66,7 +66,7 @@ cmake --build kstone/build -j"$(nproc)" && cmake --install kstone/build
 
 Shortcuts that skip building Pinocchio and Coal:
 
-- ROS apt: `sudo apt install ros-humble-pinocchio`, `source /opt/ros/humble/setup.bash`, then build kstone with CMake as above.
+- ROS apt: `sudo apt install ros-humble-pinocchio libqhull-dev`, `source /opt/ros/humble/setup.bash`, then build kstone with CMake as above.
 - pip wheels: `pip install pin coal cmeel-eigen cmeel-urdfdom-headers` in a virtual environment, then build kstone with CMake from that venv; it falls back to the wheels when no ROS or source install is found. Full commands are in [C++](docs/cpp.md#build-from-source).
 
 Details and tested versions are in [Installation](docs/install.md). Linking from your project, CMake options and the C++ API are in [C++](docs/cpp.md).

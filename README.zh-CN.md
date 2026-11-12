@@ -45,7 +45,7 @@ source install/setup.bash
 从源码构建 Pinocchio 和 Coal，再构建 kstone，都装到同一个前缀：
 
 ```bash
-sudo apt install build-essential cmake git libboost-all-dev libeigen3-dev liburdfdom-dev libassimp-dev
+sudo apt install build-essential cmake git libboost-all-dev libeigen3-dev liburdfdom-dev libassimp-dev libqhull-dev
 PREFIX=$HOME/opt/kstone
 
 git clone --recursive --depth 1 --branch v3.0.3 https://github.com/coal-library/coal.git
@@ -66,7 +66,7 @@ cmake --build kstone/build -j"$(nproc)" && cmake --install kstone/build
 
 不想编译 Pinocchio 和 Coal 时可以用这两种快捷方式：
 
-- ROS apt：`sudo apt install ros-humble-pinocchio`，`source /opt/ros/humble/setup.bash`，再按上面的命令用 CMake 构建 kstone。
+- ROS apt：`sudo apt install ros-humble-pinocchio libqhull-dev`，`source /opt/ros/humble/setup.bash`，再按上面的命令用 CMake 构建 kstone。
 - pip wheel：在虚拟环境里 `pip install pin coal cmeel-eigen cmeel-urdfdom-headers`，在该 venv 里用 CMake 构建 kstone；没有 ROS 或源码安装时会自动用这些 wheel。完整命令见 [C++](docs/zh-CN/cpp.md#build-from-source)。
 
 细节和测过的版本见[安装](docs/zh-CN/install.md)。在自己的项目里链接、CMake 选项和 C++ API 见 [C++](docs/zh-CN/cpp.md)。
