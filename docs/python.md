@@ -47,7 +47,14 @@ ws.update(q)
 target = ws.frame_pose("tool")    # 4x4, in the world frame
 target[:3, 3] += [0.0, 0.05, 0.0]
 solver.module("tool").write_port("target", target)
+solver.module("tool").tune({"orientation_weight": [0, 0, 0]})  # position only
+solver.module("arm").enabled = False  # its joint target would pull against the tool
+for _ in range(300):
+    q = solver.solve(q, 0.01).q_next
+print(solver.module("tool").outputs(q)["position_error"])  # 0.0
 ```
+
+The fixture arm has four joints, so it can't reach an arbitrary 6D pose; the snippet asks for position only. Tasks in the same solve compete: with `arm` still enabled the tool stops about 4 cm short.
 
 [examples/python/ik.py](../examples/python/ik.py) puts this together with an inline config.
 
@@ -63,11 +70,28 @@ print(engine.stats["cycles"], engine.stats["failed_cycles"])
 ```
 
 - `run()` blocks until `duration_s` passes or `stop()` is called from another thread. Without a duration it runs until stopped.
+- While `run()` is active, other Python threads can keep using the engine and its modules (`write_port`, `tune`, `home`, `q`, `stats` and so on). Each call is carried out on the control thread before its next cycle, so it waits up to one cycle. `step()` and `serve()` raise; call `serve()` before `run()`.
 - `run()` follows the wall clock. To advance faster than real time (tests, offline simulation), call `step()` in a loop and set `feedback_timeout_s: 0`; otherwise the engine attaches only after that much wall time and modules hold until then.
 - `engine.q` is the commanded configuration and `engine.measured` the last one read from the robot.
 - `engine.snapshot()` returns everything at once as a dict.
 - `engine.fresh` tells whether the last read was fresh; `engine.attached` whether the engine has synced to fresh feedback and stayed fresh since. Forward commands to hardware only while attached. See the [run contract](robot.md#run-contract).
 - `engine.groups` lists the feedback groups as `{name, fresh, attached}` (configured ones, then `default`); `engine.feedback_groups` returns the configured groups. `snapshot()["groups"]` carries the same list.
+
+To keep the loop running while your code sends targets, run it in a thread:
+
+```python
+import threading
+import time
+
+runner = threading.Thread(target=engine.run)
+runner.start()
+for x in (0.3, 0.4, 0.5):
+    engine.module("arm").write_port("target", [x, -0.3, 0.2])
+    time.sleep(1.0)
+print(engine.snapshot()["stats"]["cycles"])
+engine.stop()
+runner.join()
+```
 
 To drive real hardware, change the `robot:` section of the config. See [Robot integration](robot.md).
 
@@ -114,7 +138,7 @@ engine.tune_joint_limits({"velocity": {"j1": 0.5}})
 engine.tune_joint_limits({"reset": True})
 ```
 
-Modules can also be switched off with `module.enabled = False`. `engine.home_all()` homes every homeable module in control of some joints (watch `home_state`).
+Modules can also be switched off with `module.enabled = False`. `engine.home_all()` homes every homeable module in control of some joints (watch `home_state`). Homing moves only while the engine is attached, and it attaches only after `feedback_timeout_s` of wall time with fresh feedback. Use `run()`, or a `step()` loop paced to the wall clock.
 
 ## Watch it in the browser
 

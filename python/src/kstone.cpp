@@ -13,6 +13,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <exception>
+#include <functional>
 #include <future>
 #include <map>
 #include <memory>
@@ -25,6 +27,8 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <tuple>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -68,24 +72,111 @@ class SnapshotObserver final : public kstone::EngineObserver {
     std::shared_ptr<SnapshotRequest> request_;
 };
 
+// Hands one task from a Python caller to the control thread, run before its next cycle.
+struct CallRequest {
+    enum : int { empty, posted, claimed, finished };
+    std::mutex caller;
+    std::atomic<int> state{empty};
+    std::function<void(kstone::Engine&)> task;
+};
+
+class CallObserver final : public kstone::EngineObserver {
+  public:
+    explicit CallObserver(std::shared_ptr<CallRequest> request) : request_(std::move(request)) {}
+    void before_step(kstone::Engine& engine) override {
+        if (request_->state.load(std::memory_order_acquire) != CallRequest::posted) return;
+        int expected = CallRequest::posted;
+        if (!request_->state.compare_exchange_strong(expected, CallRequest::claimed)) return;
+        request_->task(engine);
+        request_->state.store(CallRequest::finished, std::memory_order_release);
+    }
+
+  private:
+    std::shared_ptr<CallRequest> request_;
+};
+
 struct PyEngine {
     explicit PyEngine(kstone::Engine e) : engine(std::move(e)) {
         engine.add_observer(std::make_shared<SnapshotObserver>(snapshot));
+        engine.add_observer(std::make_shared<CallObserver>(calls));
     }
     kstone::Engine engine;
     std::atomic<bool> running{false};
     std::atomic<bool> stop{false};
     std::shared_ptr<SnapshotRequest> snapshot = std::make_shared<SnapshotRequest>();
+    std::shared_ptr<CallRequest> calls = std::make_shared<CallRequest>();
 
-    // Engine state is owned by the run() thread while running.
+    // For calls that must not overlap a run() at all.
     void idle() const {
         if (running.load()) throw std::runtime_error("kstone: engine is running; stop() it first");
     }
+
+    // Runs f(engine) with the engine to itself: here when idle, else on the control thread before its next
+    // cycle. f must not touch Python objects; convert arguments before and results after.
+    template <class F>
+    auto call(F&& f) -> std::invoke_result_t<F&, kstone::Engine&> {
+        using R = std::invoke_result_t<F&, kstone::Engine&>;
+        if constexpr (std::is_void_v<R>) {
+            post([&](kstone::Engine& eng) { f(eng); });
+        } else {
+            std::optional<R> out;
+            post([&](kstone::Engine& eng) { out.emplace(f(eng)); });
+            return std::move(*out);
+        }
+    }
+
+    void post(const std::function<void(kstone::Engine&)>& task);
 };
+
+void PyEngine::post(const std::function<void(kstone::Engine&)>& task) {
+    CallRequest& r = *calls;
+    std::exception_ptr error;
+    {
+        py::gil_scoped_release release;
+        r.caller.lock();
+    }
+    std::lock_guard<std::mutex> hold(r.caller, std::adopt_lock);
+    r.task = [&](kstone::Engine& eng) {
+        try {
+            task(eng);
+        } catch (...) {
+            error = std::current_exception();
+        }
+    };
+    for (;;) {
+        // With the GIL held and running false, neither step() nor run() can touch the engine.
+        if (!running.load()) {
+            r.task(engine);
+            break;
+        }
+        r.state.store(CallRequest::posted, std::memory_order_release);
+        {
+            py::gil_scoped_release release;
+            while (r.state.load(std::memory_order_acquire) == CallRequest::posted && running.load())
+                std::this_thread::sleep_for(std::chrono::microseconds(200));
+        }
+        int expected = CallRequest::posted;
+        if (r.state.compare_exchange_strong(expected, CallRequest::empty)) continue;  // run() ended first
+        {
+            py::gil_scoped_release release;
+            while (r.state.load(std::memory_order_acquire) != CallRequest::finished)
+                std::this_thread::sleep_for(std::chrono::microseconds(200));
+        }
+        r.state.store(CallRequest::empty, std::memory_order_relaxed);
+        break;
+    }
+    r.task = nullptr;
+    if (error) std::rethrow_exception(error);
+}
 
 struct PyModule {
     std::shared_ptr<PyEngine> owner;
     std::shared_ptr<kstone::Module> module;
+
+    template <class F>
+    auto call(F&& f) const {
+        return owner->call([&](kstone::Engine&) { return f(); });
+    }
 
     std::size_t port(const std::string& name) const {
         const int i = module->port_index(name);
@@ -649,43 +740,31 @@ PYBIND11_MODULE(_core, m) {
              })
         .def_property(
             "enabled",
-            [](const PyModule& s) {
-                s.owner->idle();
-                return s.module->enabled();
-            },
-            [](const PyModule& s, bool enabled) {
-                s.owner->idle();
-                s.module->set_enabled(enabled);
-            },
+            [](const PyModule& s) { return s.call([&] { return s.module->enabled(); }); },
+            [](const PyModule& s, bool enabled) { s.call([&] { s.module->set_enabled(enabled); }); },
             "Whether the module takes part in the solve.")
         .def_property_readonly(
             "running",
-            [](const PyModule& s) {
-                s.owner->idle();
-                return s.module->running();
-            },
+            [](const PyModule& s) { return s.call([&] { return s.module->running(); }); },
             "True if the module was active in the last step.")
         .def_property_readonly(
             "held_by",
             [](const PyModule& s) -> py::object {
-                s.owner->idle();
-                const std::string* by = s.module->held_by();
-                if (by == nullptr) return py::none();
-                return py::str(*by);
+                const auto by = s.call([&]() -> std::optional<std::string> {
+                    const std::string* p = s.module->held_by();
+                    return p ? std::optional<std::string>(*p) : std::nullopt;
+                });
+                return by ? py::object(py::str(*by)) : py::object(py::none());
             },
             "Id of the higher-priority module that blocked this one in the last step, or None.")
         .def_property_readonly(
             "preempted",
-            [](const PyModule& s) {
-                s.owner->idle();
-                return s.module->preempted();
-            },
+            [](const PyModule& s) { return s.call([&] { return s.module->preempted(); }); },
             "How many times another module has blocked this one.")
         .def_property_readonly(
             "home_state",
             [](const PyModule& s) -> py::object {
-                s.owner->idle();
-                const char* state = s.module->home_state();
+                const char* state = s.call([&] { return s.module->home_state(); });
                 return state ? py::object(py::str(state)) : py::object(py::none());
             },
             "Homing progress: idle, waiting, executing, succeeded, timed_out or aborted; None if not "
@@ -701,10 +780,9 @@ PYBIND11_MODULE(_core, m) {
         .def(
             "read_port",
             [](const PyModule& s, const std::string& name) {
-                s.owner->idle();
                 const std::size_t i = s.port(name);
                 kstone::PortValue value;
-                check(s.module->read_port(i, value));
+                s.call([&] { check(s.module->read_port(i, value)); });
                 return encode(s.module->ports()[i], value);
             },
             "name"_a, R"doc(Current value of an input port.
@@ -719,18 +797,19 @@ Returns:
             "write_port",
             [](const PyModule& s, const std::string& name, py::handle value,
                std::optional<std::vector<std::string>> labels) {
-                s.owner->idle();
                 const std::size_t i = s.port(name);
                 if (labels) {
                     const auto values = py::cast<std::vector<double>>(value);
-                    check(s.module->write_port(
-                        i, *labels,
-                        Eigen::Map<const Eigen::VectorXd>(values.data(), static_cast<Eigen::Index>(values.size()))));
+                    s.call([&] {
+                        check(s.module->write_port(i, *labels,
+                                                   Eigen::Map<const Eigen::VectorXd>(
+                                                       values.data(), static_cast<Eigen::Index>(values.size()))));
+                    });
                     return;
                 }
                 kstone::PortValue decoded;
                 decode(s.module->ports()[i], value, decoded);
-                check(s.module->write_port(i, decoded));
+                s.call([&] { check(s.module->write_port(i, decoded)); });
             },
             "name"_a, "value"_a, "labels"_a = py::none(),
             R"doc(Set an input port; the module uses it from the next step.
@@ -747,10 +826,7 @@ Example:
     engine.module("arm").write_port("target", [0.2], labels=["elbow"]))doc")
         .def(
             "home",
-            [](const PyModule& s) {
-                s.owner->idle();
-                check(s.module->request_home());
-            },
+            [](const PyModule& s) { s.call([&] { check(s.module->request_home()); }); },
             "Start homing on the next step; watch home_state.")
         .def_property_readonly(
             "homeable", [](const PyModule& s) { return s.module->homeable(); },
@@ -767,8 +843,8 @@ Example:
         .def(
             "tune",
             [](const PyModule& s, const py::dict& params) {
-                s.owner->idle();
-                check(s.module->tune(to_node(params, s.module->id())));
+                const kstone::ConfigNode node = to_node(params, s.module->id());
+                s.call([&] { check(s.module->tune(node)); });
             },
             "params"_a, R"doc(Change some parameters; on error nothing changes.
 
@@ -776,28 +852,25 @@ Args:
     params: Names and new values, e.g. {'gain': 2.0}; see tune_schema.)doc")
         .def(
             "params",
-            [](const PyModule& s) {
-                s.owner->idle();
-                return to_py(s.module->tunables());
-            },
+            [](const PyModule& s) { return to_py(s.call([&] { return s.module->tunables(); })); },
             "Current tunable parameters, or None.")
         .def(
             "outputs",
             [](const PyModule& s, const Eigen::VectorXd& q) {
-                s.owner->idle();
                 const PyModel model{s.owner->engine.modules().model()};
                 model.check_vector(q, model.model->nq(), "q");
                 check(model.model->validate(q));
-                kstone::Workspace at(model.model);
-                check(at.update(q));
-                check(s.module->update_outputs(at));
-                py::dict out;
                 const auto& infos = s.module->outputs();
-                for (std::size_t i = 0; i < infos.size(); ++i) {
-                    kstone::OutputValue v;
-                    check(s.module->read_output(i, v));
-                    out[py::str(infos[i].name)] = encode_output(infos[i], v);
-                }
+                std::vector<kstone::OutputValue> values(infos.size());
+                s.call([&] {
+                    kstone::Workspace at(model.model);
+                    check(at.update(q));
+                    check(s.module->update_outputs(at));
+                    for (std::size_t i = 0; i < infos.size(); ++i) check(s.module->read_output(i, values[i]));
+                });
+                py::dict out;
+                for (std::size_t i = 0; i < infos.size(); ++i)
+                    out[py::str(infos[i].name)] = encode_output(infos[i], values[i]);
                 return out;
             },
             "q"_a,
@@ -808,16 +881,21 @@ Args:
         .def(
             "visuals",
             [](const PyModule& s) {
-                s.owner->idle();
-                py::list out;
                 const auto& infos = s.module->visuals();
+                std::vector<std::pair<bool, Eigen::Isometry3d>> placed(infos.size());
+                s.call([&] {
+                    for (std::size_t i = 0; i < infos.size(); ++i) {
+                        placed[i].second = infos[i].placement;
+                        placed[i].first = s.module->visual_placement(i, placed[i].second);
+                    }
+                });
+                py::list out;
                 for (std::size_t i = 0; i < infos.size(); ++i) {
                     const kstone::VisualInfo& v = infos[i];
                     py::dict shape("type"_a = shape_name(v.shape.type), "size"_a = v.shape.size);
                     if (v.shape.type == kstone::ShapeType::convex)
                         shape["vertices"] = Eigen::MatrixX3d(v.shape.vertices.transpose());
-                    Eigen::Isometry3d placement = v.placement;
-                    const bool shown = s.module->visual_placement(i, placement);
+                    const auto& [shown, placement] = placed[i];
                     out.append(py::dict("name"_a = v.name, "frame"_a = v.frame, "shape"_a = std::move(shape),
                                         "placement"_a = shown ? py::cast(Eigen::Matrix4d(placement.matrix()))
                                                               : py::object(py::none())));
@@ -899,10 +977,7 @@ Args:
             "Command check settings: mode ('reject', 'clamp' or 'off'), velocity_scale, tolerance.")
         .def_property_readonly(
             "quality",
-            [](const PyEngine& e) {
-                e.idle();
-                return std::string(kstone::to_string(e.engine.result().quality));
-            },
+            [](PyEngine& e) { return std::string(kstone::to_string(e.call([](kstone::Engine& g) { return g.result().quality; }))); },
             "Quality of the last solve: 'nominal' or 'degraded'.")
         .def_property_readonly(
             "solver_tune_schema",
@@ -910,16 +985,13 @@ Args:
             "JSON Schema of the tune_solver() parameters.")
         .def(
             "home_all",
-            [](PyEngine& e) {
-                e.idle();
-                check(e.engine.modules().home_all());
-            },
+            [](PyEngine& e) { e.call([](kstone::Engine& g) { check(g.modules().home_all()); }); },
             "Home every homeable module currently in control (not held by another module); watch home_state.")
         .def(
             "tune_solver",
             [](PyEngine& e, const py::dict& params) {
-                e.idle();
-                check(e.engine.modules().tune_solver(to_node(params, "solver")));
+                const kstone::ConfigNode node = to_node(params, "solver");
+                e.call([&](kstone::Engine& g) { check(g.modules().tune_solver(node)); });
             },
             "params"_a, R"doc(Change some solver options; on error nothing changes.
 
@@ -927,16 +999,13 @@ Args:
     params: Names and new values, e.g. {'damping': 1e-4}; see solver_tune_schema.)doc")
         .def(
             "solver_params",
-            [](PyEngine& e) {
-                e.idle();
-                return to_py(e.engine.modules().solver_params());
-            },
+            [](PyEngine& e) { return to_py(e.call([](kstone::Engine& g) { return g.modules().solver_params(); })); },
             "Current solver options.")
         .def(
             "tune_joint_limits",
             [](PyEngine& e, const py::dict& params) {
-                e.idle();
-                check(e.engine.modules().tune_joint_limits(to_node(params, "joint_limits")));
+                const kstone::ConfigNode node = to_node(params, "joint_limits");
+                e.call([&](kstone::Engine& g) { check(g.modules().tune_joint_limits(node)); });
             },
             "params"_a, R"doc(Narrow joint limits at run time; on error nothing changes.
 
@@ -949,102 +1018,77 @@ Example:
     engine.tune_joint_limits({"velocity": {"j1": 0.5}}))doc")
         .def(
             "joint_limits",
-            [](PyEngine& e) {
-                e.idle();
-                return to_py(e.engine.modules().joint_limits());
-            },
+            [](PyEngine& e) { return to_py(e.call([](kstone::Engine& g) { return g.modules().joint_limits(); })); },
             "Joint limit overrides currently in force.")
         .def_property_readonly(
             "result",
-            [](const PyEngine& e) {
-                e.idle();
-                return e.engine.result();
-            },
+            [](PyEngine& e) { return e.call([](kstone::Engine& g) { return g.result(); }); },
             "Result of the last successful solve.")
         .def_property_readonly(
             "running", [](const PyEngine& e) { return e.running.load(); }, "True while run() is active.")
         .def_property_readonly(
             "time",
-            [](const PyEngine& e) {
-                e.idle();
-                return e.engine.stats().time;
-            },
+            [](PyEngine& e) { return e.call([](kstone::Engine& g) { return g.stats().time; }); },
             "Engine time in seconds.")
         .def_property_readonly(
             "stats",
-            [](const PyEngine& e) {
-                e.idle();
-                return stats_dict(e.engine.stats());
-            },
+            [](PyEngine& e) { return stats_dict(e.call([](kstone::Engine& g) { return g.stats(); })); },
             "Counters and cycle times, e.g. cycles, overruns, failed_cycles, cycle_p99_s.")
         .def_property_readonly(
             "q",
-            [](const PyEngine& e) {
-                e.idle();
-                return Eigen::VectorXd(e.engine.state().q);
-            },
+            [](PyEngine& e) { return e.call([](kstone::Engine& g) { return Eigen::VectorXd(g.state().q); }); },
             "Robot joint positions from the last read, size nq.")
         .def_property_readonly(
             "v",
-            [](const PyEngine& e) {
-                e.idle();
-                return Eigen::VectorXd(e.engine.state().v);
-            },
+            [](PyEngine& e) { return e.call([](kstone::Engine& g) { return Eigen::VectorXd(g.state().v); }); },
             "Robot joint velocities from the last read, size nv.")
         .def_property_readonly(
             "ideal",
-            [](const PyEngine& e) {
-                e.idle();
-                return Eigen::VectorXd(e.engine.ideal());
-            },
+            [](PyEngine& e) { return e.call([](kstone::Engine& g) { return Eigen::VectorXd(g.ideal()); }); },
             "Commanded positions the next solve starts from, size nq.")
         .def_property_readonly(
             "fresh",
-            [](const PyEngine& e) {
-                e.idle();
-                return e.engine.fresh();
-            },
+            [](PyEngine& e) { return e.call([](kstone::Engine& g) { return g.fresh(); }); },
             "False when robot feedback is older than feedback_timeout_s.")
         .def_property_readonly(
             "attached",
-            [](const PyEngine& e) {
-                e.idle();
-                return e.engine.attached();
-            },
+            [](PyEngine& e) { return e.call([](kstone::Engine& g) { return g.attached(); }); },
             "True once feedback stayed fresh for feedback_timeout_s, synced every cycle; forward to hardware only then.")
         .def_property_readonly(
             "groups",
-            [](const PyEngine& e) {
-                e.idle();
+            [](PyEngine& e) {
+                const auto groups = e.call([](kstone::Engine& g) {
+                    std::vector<std::tuple<std::string, bool, bool>> out;
+                    for (std::size_t i = 0; i < g.group_count(); ++i)
+                        out.emplace_back(g.group_name(i), g.group_fresh(i), g.group_attached(i));
+                    return out;
+                });
                 py::list out;
-                for (std::size_t i = 0; i < e.engine.group_count(); ++i)
-                    out.append(py::dict("name"_a = e.engine.group_name(i), "fresh"_a = e.engine.group_fresh(i),
-                                        "attached"_a = e.engine.group_attached(i)));
+                for (const auto& [name, fresh, attached] : groups)
+                    out.append(py::dict("name"_a = name, "fresh"_a = fresh, "attached"_a = attached));
                 return out;
             },
             "Feedback groups, configured ones then 'default': [{name, fresh, attached}]; attached is per group.")
         .def_property_readonly(
             "written",
-            [](const PyEngine& e) {
-                e.idle();
-                return e.engine.written();
-            },
+            [](PyEngine& e) { return e.call([](kstone::Engine& g) { return g.written(); }); },
             "Whether the last cycle sent a command (False while paused).")
         .def_property_readonly(
             "command",
-            [](const PyEngine& e) {
-                e.idle();
-                const kstone::RobotCommand& c = e.engine.command();
+            [](PyEngine& e) {
+                const kstone::RobotCommand c = e.call([](kstone::Engine& g) { return g.command(); });
                 return py::dict("q"_a = Eigen::VectorXd(c.q), "v"_a = Eigen::VectorXd(c.v),
                                 "fresh"_a = c.fresh);
             },
             "Last command sent to the robot: {q, v, fresh}.")
         .def_property_readonly(
             "measured",
-            [](const PyEngine& e) -> py::object {
-                e.idle();
-                const Eigen::VectorXd* est = e.engine.measured();
-                return est ? py::cast(Eigen::VectorXd(*est)) : py::none();
+            [](PyEngine& e) -> py::object {
+                const auto est = e.call([](kstone::Engine& g) -> std::optional<Eigen::VectorXd> {
+                    const Eigen::VectorXd* p = g.measured();
+                    return p ? std::optional<Eigen::VectorXd>(*p) : std::nullopt;
+                });
+                return est ? py::cast(*est) : py::none();
             },
             "Measured positions used by feedback, or None while feedback is stale.")
         .def_property_readonly(
@@ -1096,17 +1140,25 @@ Args:
     rate_hz: New rate in Hz, > 0.)doc")
         .def(
             "reset_stats",
-            [](PyEngine& e) {
-                e.idle();
-                e.engine.reset_stats();
-            },
+            [](PyEngine& e) { e.call([](kstone::Engine& g) { g.reset_stats(); }); },
             "Reset stats; time is kept.")
         .def("snapshot", &snapshot, "State of the last cycle as one dict; works while run() is active.")
         .def("run", &run, "duration_s"_a = 0.0,
-             R"doc(Run cycles, paced to the wall clock.
+             R"doc(Run cycles, paced to the wall clock; blocks until done.
+
+While it runs, other Python threads can use the engine and its modules
+(write_port, tune, home, q, stats, ...): each call is carried out on the
+control thread before its next cycle, so it waits up to one cycle. step()
+and serve() raise instead.
 
 Args:
-    duration_s: Engine time to run in seconds; 0 runs until stop() or Ctrl-C.)doc")
+    duration_s: Engine time to run in seconds; 0 runs until stop() or Ctrl-C.
+
+Example:
+    t = threading.Thread(target=engine.run)
+    t.start()
+    engine.module("arm").write_port("target", [0.4, 0.0, 0.3])
+    engine.stop(); t.join())doc")
         .def(
             "stop", [](PyEngine& e) { e.stop = true; }, "Make run() return; call it from another thread.")
         .def(

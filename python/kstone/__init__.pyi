@@ -410,6 +410,10 @@ class Module:
     def tune_schema(self) -> dict[str, Any] | None:
         """JSON Schema of the tune() parameters, or None."""
 
+    @property
+    def properties(self) -> Any | None:
+        """Fixed configuration facts such as chassis kinematics, or None."""
+
     def tune(self, params: dict[str, Any]) -> None:
         """Change some parameters; on error nothing changes.
 
@@ -686,10 +690,21 @@ class Engine:
         """State of the last cycle as one dict; works while run() is active."""
 
     def run(self, duration_s: float = 0.0) -> None:
-        """Run cycles, paced to wall-clock time if realtime is set.
+        """Run cycles, paced to the wall clock; blocks until done.
+
+        While it runs, other Python threads can use the engine and its modules
+        (write_port, tune, home, q, stats, ...): each call is carried out on the
+        control thread before its next cycle, so it waits up to one cycle. step()
+        and serve() raise instead.
 
         Args:
             duration_s: Engine time to run in seconds; 0 runs until stop() or Ctrl-C.
+
+        Example:
+            t = threading.Thread(target=engine.run)
+            t.start()
+            engine.module("arm").write_port("target", [0.4, 0.0, 0.3])
+            engine.stop(); t.join()
         """
 
     def stop(self) -> None:

@@ -377,21 +377,38 @@ assert np.array_equal(snap["measured"], e.measured)
 assert [m["id"] for m in snap["modules"]] == e.modules
 assert set(snap["modules"][0]["ports"]) == {p["name"] for p in e.module(e.modules[0]).ports}
 
-# Ctrl-C-free stop from another thread; state access is refused while running.
-runner = threading.Thread(target=e.run)
+# Ctrl-C-free stop from another thread; the API works while running, except step() and serve().
+runner = threading.Thread(target=e.run, daemon=True)  # A failed check must not hang the test.
 runner.start()
 while not e.running:
     time.sleep(0.001)
-try:
-    e.q
-    raise AssertionError("q readable while running")
-except RuntimeError as err:
-    assert "running" in str(err)
+for refused in (e.step, e.serve):
+    try:
+        refused()
+        raise AssertionError("%s allowed while running" % refused.__name__)
+    except RuntimeError as err:
+        assert "running" in str(err)
 first = e.snapshot()
 later = e.snapshot()
 assert e.running and later["stats"]["cycles"] > first["stats"]["cycles"] > 0
+arm = e.module("arm")
+c0 = e.stats["cycles"]
+arm.write_port("target", [0.3, -0.2, 0.1])
+assert np.allclose(arm.read_port("target"), [0.3, -0.2, 0.1])
+arm.tune({"gain": 0.8})
+assert arm.params()["gain"] == 0.8 and e.stats["cycles"] > c0
+expect_error("invalid_argument", arm.tune, {"gain": 2.0})
+assert e.q.shape == (e.model.nq,) and e.time > 0 and e.quality in ("nominal", "degraded")
+assert arm.enabled and isinstance(arm.outputs(e.q), dict) and isinstance(arm.visuals(), list)
+callers = [threading.Thread(target=lambda: [e.stats for _ in range(20)]) for _ in range(4)]
+for c in callers:
+    c.start()
+for c in callers:
+    c.join(5.0)
+assert not any(c.is_alive() for c in callers)
 e.stop()
 runner.join(5.0)
 assert not runner.is_alive() and not e.running
+assert np.allclose(arm.read_port("target"), [0.3, -0.2, 0.1]) and arm.params()["gain"] == 0.8
 
 print("ok")

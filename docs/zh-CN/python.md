@@ -47,7 +47,14 @@ ws.update(q)
 target = ws.frame_pose("tool")    # 4x4，世界坐标系
 target[:3, 3] += [0.0, 0.05, 0.0]
 solver.module("tool").write_port("target", target)
+solver.module("tool").tune({"orientation_weight": [0, 0, 0]})  # 只要位置
+solver.module("arm").enabled = False  # 它的关节目标会和 tool 互相拉扯
+for _ in range(300):
+    q = solver.solve(q, 0.01).q_next
+print(solver.module("tool").outputs(q)["position_error"])  # 0.0
 ```
+
+测试用的机械臂只有四个关节，到不了任意 6D 位姿，所以这段只要位置。同一次求解里的任务会互相竞争：`arm` 不关的话，tool 会差大约 4 cm 到不了。
 
 [examples/python/ik.py](../../examples/python/ik.py) 用内联配置完整演示了这个过程。
 
@@ -63,11 +70,28 @@ print(engine.stats["cycles"], engine.stats["failed_cycles"])
 ```
 
 - `run()` 会阻塞，直到过了 `duration_s` 或者另一个线程调用了 `stop()`。不传时长就一直运行到停止为止。
+- `run()` 运行期间，其他 Python 线程可以照常使用引擎和模块（`write_port`、`tune`、`home`、`q`、`stats` 等）。每次调用都在控制线程的下一个周期之前执行，所以最多等一个周期。`step()` 和 `serve()` 会报错；`serve()` 要在 `run()` 之前调用。
 - `run()` 按真实时钟运行。要比实时更快地推进（测试、离线仿真），循环调用 `step()`，并设 `feedback_timeout_s: 0`；否则引擎要等这么长的真实时间才同步，此前模块保持不动。
 - `engine.q` 是命令的关节位置，`engine.measured` 是最近一次从机器人读到的关节位置。
 - `engine.snapshot()` 把所有状态打包成一个 dict 返回。
 - `engine.fresh` 表示最近一次读取是否新鲜；`engine.attached` 表示引擎是否已同步到新鲜反馈且此后一直新鲜。只在 attached 时向真机下发命令，见[运行契约](robot.md#run-contract)。
 - `engine.groups` 以 `{name, fresh, attached}` 列出各反馈组（先是配置的组，最后是 `default`）；`engine.feedback_groups` 返回配置的组。`snapshot()["groups"]` 是同一列表。
+
+要让循环一直跑、同时由你的代码发目标，就把它放到线程里：
+
+```python
+import threading
+import time
+
+runner = threading.Thread(target=engine.run)
+runner.start()
+for x in (0.3, 0.4, 0.5):
+    engine.module("arm").write_port("target", [x, -0.3, 0.2])
+    time.sleep(1.0)
+print(engine.snapshot()["stats"]["cycles"])
+engine.stop()
+runner.join()
+```
 
 要驱动真机，修改配置的 `robot:` 部分即可，见[接入机器人](robot.md)。
 
@@ -114,7 +138,7 @@ engine.tune_joint_limits({"velocity": {"j1": 0.5}})
 engine.tune_joint_limits({"reset": True})
 ```
 
-用 `module.enabled = False` 可以关闭模块。`engine.home_all()` 让当前控制着关节、且支持 home 的模块都回到 home（看 `home_state`）。
+用 `module.enabled = False` 可以关闭模块。`engine.home_all()` 让当前控制着关节、且支持 home 的模块都回到 home（看 `home_state`）。回 home 只在引擎已同步（attached）时推进，而同步要求反馈连续新鲜 `feedback_timeout_s` 的真实时间。请用 `run()`，或者按真实时钟节拍调用 `step()`。
 
 <a id="watch-it-in-the-browser"></a>
 ## 在浏览器里查看
