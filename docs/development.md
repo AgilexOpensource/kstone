@@ -18,10 +18,12 @@
 
 On newer kernels (such as 6.8) TSan fails at startup unless ASLR is disabled: `setarch -R ./scripts/check.sh tsan`. Running a TSan-built executable by hand needs the same `setarch -R` prefix.
 
-C and C++ sources follow [.clang-format](../.clang-format), checked with clang-format 21.1.8 (`pip install clang-format==21.1.8`):
+C and C++ sources follow [.clang-format](../.clang-format), checked with clang-format 21.1.8 (`pip install clang-format==21.1.8`). CI fails on any unformatted file. `check.sh` runs the same check first and skips it with a warning when that version is missing.
 
 ```bash
-git ls-files -z -- '*.c' '*.h' '*.cpp' '*.hpp' | xargs -0 clang-format -i
+./scripts/format.sh                       # check all tracked sources
+./scripts/format.sh -i                    # format them in place
+git config core.hooksPath scripts/hooks   # check staged files on every commit
 ```
 
 `scripts/rm_tmp.sh` removes build and test output: the build root, `*.log` in the repo root, `__pycache__`, `*.egg-info`, the mypy and pytest caches, and scratch dirs that `test_wheel.sh` leaves under `/tmp` if it is interrupted. `-n` only lists them. `.venv` is kept.

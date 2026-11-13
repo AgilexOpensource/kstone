@@ -18,10 +18,12 @@
 
 较新内核（如 6.8）上 TSan 启动会失败，需关闭 ASLR：`setarch -R ./scripts/check.sh tsan`。手动运行 TSan 构建的可执行文件同样要加 `setarch -R`。
 
-C 和 C++ 源码遵循 [.clang-format](../../.clang-format)，用 clang-format 21.1.8 检查（`pip install clang-format==21.1.8`）：
+C 和 C++ 源码遵循 [.clang-format](../../.clang-format)，用 clang-format 21.1.8 检查（`pip install clang-format==21.1.8`）。有文件格式不符时 CI 会失败。`check.sh` 会先跑同样的检查，找不到这个版本时给出警告并跳过。
 
 ```bash
-git ls-files -z -- '*.c' '*.h' '*.cpp' '*.hpp' | xargs -0 clang-format -i
+./scripts/format.sh                       # 检查所有已跟踪的源码
+./scripts/format.sh -i                    # 原地格式化
+git config core.hooksPath scripts/hooks   # 每次提交时检查暂存的文件
 ```
 
 `scripts/rm_tmp.sh` 清理构建和测试产物：构建根目录、仓库根目录的 `*.log`、`__pycache__`、`*.egg-info`、mypy 和 pytest 缓存，以及 `test_wheel.sh` 中断时留在 `/tmp` 下的临时目录。加 `-n` 只列出不删除。`.venv` 会保留。

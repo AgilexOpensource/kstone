@@ -11,6 +11,13 @@ presets=("$@")
 root=${KSTONE_BUILD_ROOT:-build}
 read -ra extra <<< "${KSTONE_CMAKE_ARGS:-}"
 
+if scripts/format.sh --probe; then
+    echo "== format"
+    scripts/format.sh
+else
+    echo "check.sh: WARNING: clang-format 21.1.8 not found, format check skipped (pip install clang-format==21.1.8)" >&2
+fi
+
 # The Python extension is built and tested when the active python has pybind11 (not under sanitizers).
 python=()
 pin_py=()

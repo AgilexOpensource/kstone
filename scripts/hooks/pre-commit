@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Reject commits whose staged C/C++ files are not clang-formatted. Enable with: git config core.hooksPath scripts/hooks
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+mapfile -d '' files < <(git diff --cached --name-only --diff-filter=ACMR -z -- '*.c' '*.h' '*.cpp' '*.hpp')
+[[ ${#files[@]} -eq 0 ]] && exit 0
+scripts/format.sh "${files[@]}" || { echo "pre-commit: fix with scripts/format.sh -i, then git add" >&2; exit 1; }
