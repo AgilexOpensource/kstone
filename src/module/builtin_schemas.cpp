@@ -225,9 +225,9 @@ ParamSchema<NullSpaceModuleConfig> null_space() {
     ParamSchema<C> s("Null-space preference under a frame task.");
     s.ref("primary", &C::primary, "frame_target").required();
     s.field("joints", &C::joints).doc("Empty = the primary's driven scalar joints.");
-    s.field("preference", &C::preference,
-            {{"posture", NullSpacePreference::posture},
-             {"manipulability", NullSpacePreference::manipulability}})
+    s.field(
+         "preference", &C::preference,
+         {{"posture", NullSpacePreference::posture}, {"manipulability", NullSpacePreference::manipulability}})
         .tunable();
     s.field("projector", &C::projector, null_space_settings());
     s.field("task", &C::task, task_options());

@@ -804,7 +804,8 @@ Status JointTargetModule::on_preempted(const Cycle&, const std::string&) {
 Status JointTargetModule::reset(const Cycle& cycle) {
     measure(cycle);
     // on_idle claim resumes idle from where the joints are.
-    if (cycle.rebase || !has_target_ || (config_.on_idle == OnIdle::claim && !claiming_)) target_ = measured_;
+    if (cycle.rebase || !has_target_ || (config_.on_idle == OnIdle::claim && !claiming_))
+        target_ = measured_;
     else if (filling_)
         for (std::size_t i = 0; i < fill_.size(); ++i)
             if (fill_[i]) target_[static_cast<Index>(i)] = measured_[static_cast<Index>(i)];
@@ -1618,7 +1619,8 @@ Status ChassisModule::configure(ModuleSetup& setup) {
     const JointInfo& root = model.joints().at(1);
     Mask locked(static_cast<std::size_t>(model.nv()));
     locked.set_range(static_cast<std::size_t>(root.idx_v), static_cast<std::size_t>(root.nv));
-    if (const std::optional<double> timeout = setup.feedback_timeout_s()) config_.chassis.odom_timeout_s = *timeout;
+    if (const std::optional<double> timeout = setup.feedback_timeout_s())
+        config_.chassis.odom_timeout_s = *timeout;
     Result<ChassisController> ctrl = ChassisController::create(config_.chassis);
     if (!ctrl) return std::move(ctrl).error();
     if (Status s = ctrl->set_scheduler_period(config_.period_s); !s) return s;

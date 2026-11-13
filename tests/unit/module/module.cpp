@@ -97,7 +97,6 @@ struct Probe final : Module {
     Status on_write_port(std::size_t, const PortValue&) override { return {}; }
 
   public:
-
     ModelPtr model;
     std::vector<std::string> joints;
     double target;

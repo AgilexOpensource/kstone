@@ -590,8 +590,8 @@ TEST_CASE("engine: robot errors abort the cycle without writing") {
 TEST_CASE("engine: the chassis odometry timeout follows feedback_timeout_s") {
     ModelOptions free;
     free.root = RootJoint::free_flyer;
-    auto model = Model::load(ModelSource::file((kFixtures / "diff_chassis.urdf").string()), free,
-                             Context::defaults());
+    auto model =
+        Model::load(ModelSource::file((kFixtures / "diff_chassis.urdf").string()), free, Context::defaults());
     REQUIRE(model);
     auto set = ModuleSet::create(*model);
     REQUIRE(set);
@@ -940,7 +940,9 @@ TEST_CASE("resolve_feedback_groups: configured groups first, then default, mimic
     auto model = Model::load(ModelSource::file((kFixtures / "arm.urdf").string()), {}, Context::defaults());
     REQUIRE(model);
     const Model& m = **model;
-    const auto group_of = [&](const FeedbackLayout& l, const char* joint) { return l.joint_group[*m.joint_id(joint)]; };
+    const auto group_of = [&](const FeedbackLayout& l, const char* joint) {
+        return l.joint_group[*m.joint_id(joint)];
+    };
 
     auto none = resolve_feedback_groups(m, {});
     REQUIRE(none);
@@ -1280,9 +1282,10 @@ TEST_CASE("engine: configuration errors carry location and path") {
     CHECK_MESSAGE(m.find("t.yaml:2:10: rate_hz: must be > 0") == 0, m);
 
     {
-        auto doc = parse_yaml("model: {file: arm.urdf}\nfeedback_timeout_s: 0\n"
-                              "feedback_groups: [{name: wrist, joints: [j4]}]\n",
-                              "t.yaml");
+        auto doc = parse_yaml(
+            "model: {file: arm.urdf}\nfeedback_timeout_s: 0\n"
+            "feedback_groups: [{name: wrist, joints: [j4]}]\n",
+            "t.yaml");
         REQUIRE(doc);
         auto e = build_engine(*doc, kFixtures);
         REQUIRE_MESSAGE(e, message(e));

@@ -40,7 +40,8 @@ static int flaky_create(const kstone_robot_config* c, void** handle, char* error
     r->report_groups = strstr(p, "\"report_groups\":true") != NULL;
     if (r->report_groups) {
         /* Expects feedback_groups [{name: hand, joints: [finger_left_joint]}]; the mimic follows its leader. */
-        int ok = c->group_count == 2 && strcmp(c->groups[0], "hand") == 0 && strcmp(c->groups[1], "default") == 0;
+        int ok =
+            c->group_count == 2 && strcmp(c->groups[0], "hand") == 0 && strcmp(c->groups[1], "default") == 0;
         for (size_t i = 0; ok && i < c->joint_count; ++i)
             ok = c->joints[i].group == (strncmp(c->joints[i].name, "finger_", 7) == 0 ? 0u : 1u);
         if (!ok) {

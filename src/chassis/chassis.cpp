@@ -764,7 +764,8 @@ Status ChassisController::start(double now, const std::optional<Pose2D>& pose) {
     if (m.state != ChassisState::configured)
         return make_error(ErrorCode::invalid_argument, "chassis: can only start from configured");
     if (!m.period) return make_error(ErrorCode::invalid_argument, "chassis: scheduler period is not set");
-    if (pose && !finite(*pose)) return make_error(ErrorCode::invalid_argument, "chassis: pose must be finite");
+    if (pose && !finite(*pose))
+        return make_error(ErrorCode::invalid_argument, "chassis: pose must be finite");
     if (pose) m.pose = m.ramp = *pose;
     m.last_step = m.integrated_until = now;
     m.state = ChassisState::active;
@@ -787,7 +788,8 @@ Status ChassisController::resynchronize(double now, const std::optional<Pose2D>&
     if (m.state != ChassisState::paused && m.state != ChassisState::fault)
         return make_error(ErrorCode::invalid_argument,
                           "chassis: can only resynchronize while paused or faulted");
-    if (pose && !finite(*pose)) return make_error(ErrorCode::invalid_argument, "chassis: pose must be finite");
+    if (pose && !finite(*pose))
+        return make_error(ErrorCode::invalid_argument, "chassis: pose must be finite");
     if (pose) m.pose = *pose;
     m.clear_motion();
     m.last_step = m.integrated_until = now;

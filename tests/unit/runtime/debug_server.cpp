@@ -958,7 +958,8 @@ TEST_CASE("debug server: home_all op homes the modules in control") {
         const ConfigNode st = a.read_type("state");
         for (const char* id : {"tool", "arm", "fingers"}) CHECK(home(st, id) == "idle");
     }
-    a.send(R"({"op":"set_port","id":2,"module":"tool","port":"target","value":{"position":[0.3,0.0,0.5],"orientation":[1,0,0,0]}})");
+    a.send(
+        R"({"op":"set_port","id":2,"module":"tool","port":"target","value":{"position":[0.3,0.0,0.5],"orientation":[1,0,0,0]}})");
     CHECK(reply_to(a, 2).find("ok")->as_bool());
     a.read_type("state");
     a.send(R"({"op":"home_all","id":3})");

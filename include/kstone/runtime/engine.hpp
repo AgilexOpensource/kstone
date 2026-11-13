@@ -105,11 +105,12 @@ struct EngineStats {
     std::uint64_t guard_clamps{0};    ///< Cycles whose command the guard clamped.
     std::uint64_t held_cycles{0};     ///< Paused cycles (no solve, no write).
     std::uint64_t stale_cycles{0};    ///< Written cycles with any feedback group stale.
-    std::uint64_t resyncs{0};         ///< Group resynchronizations to the measured state (resume, fresh after stale).
-    std::uint64_t attaches{0};        ///< Group attachments (Engine::group_attached()), including the first ones.
-    std::uint64_t failed_cycles{0};   ///< Failed step() calls (nothing written).
-    double time{0.0};                 ///< `now` of the last cycle (s).
-    double last_cycle_s{0.0};         ///< Wall time of the last read-solve-write.
+    std::uint64_t resyncs{
+        0};  ///< Group resynchronizations to the measured state (resume, fresh after stale).
+    std::uint64_t attaches{0};  ///< Group attachments (Engine::group_attached()), including the first ones.
+    std::uint64_t failed_cycles{0};  ///< Failed step() calls (nothing written).
+    double time{0.0};                ///< `now` of the last cycle (s).
+    double last_cycle_s{0.0};        ///< Wall time of the last read-solve-write.
     double max_cycle_s{0.0};
     double max_lateness_s{0.0};   ///< Largest wall-clock lateness past a realtime deadline (s).
     LatencyHistogram cycle_hist;  ///< Every successful cycle's last_cycle_s.
@@ -182,7 +183,8 @@ class KSTONE_EXPORT Engine {
     /// Last guarded command; unspecified after a failed step().
     const RobotCommand& command() const noexcept;
     bool written() const noexcept;  ///< Whether the last successful cycle wrote (false when paused).
-    bool fresh() const noexcept;    ///< Whether every feedback group was fresh in the last read (see feedback_timeout_s).
+    bool fresh() const
+        noexcept;  ///< Whether every feedback group was fresh in the last read (see feedback_timeout_s).
     /// Whether every feedback group is attached (see group_attached()).
     bool attached() const noexcept;
     std::size_t group_count() const noexcept;

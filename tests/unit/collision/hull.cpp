@@ -79,8 +79,8 @@ TEST_CASE("convex hull: near-coplanar tessellated rings") {
             for (int r = 0; r < 4; ++r) {
                 const double radius = r < 2 ? 0.05 : 0.03;
                 const double z = (r % 2) * 0.1 + (r >= 2 ? 0.02 : 0.0);
-                p.col(4 * i + r) = Eigen::Vector3d(radius * std::cos(a) + u(rng),
-                                                   radius * std::sin(a) + u(rng), z + u(rng));
+                p.col(4 * i + r) =
+                    Eigen::Vector3d(radius * std::cos(a) + u(rng), radius * std::sin(a) + u(rng), z + u(rng));
             }
         }
         p = Eigen::AngleAxisd(0.3 + seed, Eigen::Vector3d(1, 2, 3).normalized()).toRotationMatrix() * p;

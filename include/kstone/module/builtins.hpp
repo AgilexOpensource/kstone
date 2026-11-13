@@ -160,7 +160,8 @@ class KSTONE_EXPORT JointTargetModule final : public Module {
     Status set_target(const Eigen::Ref<const Eigen::VectorXd>& target);
     /// Sets only the named joints (any subset, any order); the others keep target(), or the measured
     /// position if the module is disabled or not running when called.
-    Status set_target(const std::vector<std::string>& joints, const Eigen::Ref<const Eigen::VectorXd>& values);
+    Status set_target(const std::vector<std::string>& joints,
+                      const Eigen::Ref<const Eigen::VectorXd>& values);
     const Eigen::VectorXd& target() const noexcept { return target_; }
     bool claiming() const noexcept { return claiming_; }
     /// The last target was reached (claim kept).

@@ -57,7 +57,8 @@ struct ChassisConfig {
     ChassisKinematics kinematics{ChassisKinematics::omni};
     double target_position_deadband{0.0};  ///< Differential: goal moves below this keep the current path.
     double target_orientation_deadband{0.0};
-    double odom_timeout_s{0.25};  ///< 0 = odometry never goes stale. The chassis module uses the engine feedback_timeout_s.
+    double odom_timeout_s{
+        0.25};  ///< 0 = odometry never goes stale. The chassis module uses the engine feedback_timeout_s.
     double command_timeout_s{0.25};
     double max_dt_s{0.1};
     int allowed_missed_cycles{2};

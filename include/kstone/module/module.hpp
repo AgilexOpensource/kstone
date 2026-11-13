@@ -39,7 +39,8 @@ struct Cycle {
     const Eigen::VectorXd* lower_limit{nullptr};
     const Eigen::VectorXd* upper_limit{nullptr};
     std::uint64_t limits_revision{0};  ///< Changes whenever the solver options may have changed the limits.
-    bool resynced{false};  ///< This module's joints were resynchronized since its last prepare(); homings abort.
+    bool resynced{
+        false};  ///< This module's joints were resynchronized since its last prepare(); homings abort.
 };
 
 /// What a running module does when it becomes held.

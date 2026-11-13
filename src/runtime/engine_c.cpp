@@ -161,7 +161,9 @@ size_t kstone_engine_nv(const kstone_engine* engine) {
 
 double kstone_engine_dt(const kstone_engine* engine) { return engine ? engine->engine.dt() : 0.0; }
 
-size_t kstone_engine_group_count(const kstone_engine* engine) { return engine ? engine->engine.group_count() : 0; }
+size_t kstone_engine_group_count(const kstone_engine* engine) {
+    return engine ? engine->engine.group_count() : 0;
+}
 
 const char* kstone_engine_group_name(const kstone_engine* engine, size_t i) {
     return engine && i < engine->engine.group_count() ? engine->engine.group_name(i).c_str() : nullptr;

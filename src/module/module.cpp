@@ -133,13 +133,15 @@ Status Module::write_port(std::size_t index, const std::vector<Eigen::Index>& el
         return make_error(ErrorCode::out_of_range, "module '" + id_ + "': no such port");
     const PortInfo& port = ports_[index];
     const auto who = [&] { return "module '" + id_ + "': port " + port.name; };
-    if (port.type != PortType::vector) return make_error(ErrorCode::invalid_argument, who() + " is not a vector");
+    if (port.type != PortType::vector)
+        return make_error(ErrorCode::invalid_argument, who() + " is not a vector");
     if (elements.empty() || static_cast<Eigen::Index>(elements.size()) != values.size())
         return make_error(ErrorCode::invalid_argument, who() + ": need one value per element");
     if (!values.allFinite()) return make_error(ErrorCode::invalid_argument, who() + ": non-finite value");
     element_seen_.assign(port.labels.size(), 0);
     for (const Eigen::Index e : elements) {
-        if (e < 0 || e >= port.size()) return make_error(ErrorCode::out_of_range, who() + ": element out of range");
+        if (e < 0 || e >= port.size())
+            return make_error(ErrorCode::out_of_range, who() + ": element out of range");
         char& seen = element_seen_[static_cast<std::size_t>(e)];
         if (seen)
             return make_error(ErrorCode::invalid_argument,
@@ -155,8 +157,8 @@ Status Module::on_write_port_elements(std::size_t index, const std::vector<Eigen
                                       const Eigen::Ref<const Eigen::VectorXd>& values) {
     if (Status s = read_port(index, element_value_); !s) return s;
     if (element_value_.vector.size() != ports_[index].size())
-        return make_error(ErrorCode::internal, "module '" + id_ + "': port " + ports_[index].name +
-                                                   " read back the wrong size");
+        return make_error(ErrorCode::internal,
+                          "module '" + id_ + "': port " + ports_[index].name + " read back the wrong size");
     for (std::size_t k = 0; k < elements.size(); ++k)
         element_value_.vector[elements[k]] = values[static_cast<Eigen::Index>(k)];
     return on_write_port(index, element_value_);
@@ -376,7 +378,8 @@ Status ModuleSet::set_feedback_timeout(double seconds) {
     if (impl_->attempted)
         return make_error(ErrorCode::invalid_argument, "module set: set_feedback_timeout after configure");
     if (!std::isfinite(seconds) || seconds < 0.0)
-        return make_error(ErrorCode::invalid_argument, "module set: feedback timeout must be finite and >= 0");
+        return make_error(ErrorCode::invalid_argument,
+                          "module set: feedback timeout must be finite and >= 0");
     impl_->feedback_timeout_s = seconds;
     return {};
 }
@@ -441,10 +444,10 @@ Status ModuleSet::configure() {
         e.order = sorted.size();
         e.driven = Mask(nv);
         e.locked = Mask(nv);
-        ModuleSetup::State state{s.model,         s.context,       s.initial,       s.lower_limit,
-                                 s.upper_limit,   s.feedback_timeout_s, s.solver,  *e.module,
-                                 e.module->id(),  e.tasks,         e.task_options,  e.constraints,
-                                 e.driven,        locked,          e.locked};
+        ModuleSetup::State state{
+            s.model,  s.context, s.initial,      s.lower_limit, s.upper_limit,  s.feedback_timeout_s,
+            s.solver, *e.module, e.module->id(), e.tasks,       e.task_options, e.constraints,
+            e.driven, locked,    e.locked};
         ModuleSetup setup(state);
         if (Status st = e.module->configure(setup); !st)
             return with_context(st.error(), "module '" + e.module->id() + "'");
@@ -558,8 +561,10 @@ Status ModuleSet::step(const Eigen::Ref<const Eigen::VectorXd>& q, const Eigen::
         for (const std::uint64_t n : e.module->write_counts_) writes += n;
         // A port write after the rebase request supersedes it.
         if (e.rebase && writes != e.rebase_writes) e.rebase = false;
-        e.resync = e.resync || s.resync || intersects(e.driven, s.resync_dofs) || intersects(e.locked, s.resync_dofs);
-        if ((s.resync && s.rebase) || intersects(e.driven, s.rebase_dofs) || intersects(e.locked, s.rebase_dofs)) {
+        e.resync = e.resync || s.resync || intersects(e.driven, s.resync_dofs) ||
+                   intersects(e.locked, s.resync_dofs);
+        if ((s.resync && s.rebase) || intersects(e.driven, s.rebase_dofs) ||
+            intersects(e.locked, s.rebase_dofs)) {
             e.rebase = true;
             e.rebase_writes = writes;
         }

@@ -68,14 +68,25 @@ class Ring {
 using SteadyClock = std::chrono::steady_clock;
 
 constexpr int kProtocolVersion = 1;
-constexpr const char* kCommandOps[] = {"set_port", "set_enabled", "home",     "tune",       "tune_solver",
+constexpr const char* kCommandOps[] = {"set_port", "set_enabled", "home",     "tune",        "tune_solver",
                                        "pause",    "step",        "set_rate", "tune_limits", "home_all"};
 constexpr double kMaxTimeoutS = 60.0;
 constexpr auto kAuthGrace = std::chrono::seconds(5);  // Unauthenticated connections are dropped after this.
 constexpr std::size_t kMinToken = 16;
 constexpr std::size_t kMaxToken = 1024;
 
-enum class Op { set_port, set_enabled, home, tune, tune_solver, pause, step, set_rate, tune_limits, home_all };
+enum class Op {
+    set_port,
+    set_enabled,
+    home,
+    tune,
+    tune_solver,
+    pause,
+    step,
+    set_rate,
+    tune_limits,
+    home_all
+};
 constexpr double kMaxStepCycles = 1e6;
 constexpr double kMaxRateHz = 1e4;
 
@@ -559,7 +570,8 @@ struct DebugServer::Impl {
                 node.set("params", m->tunables());
                 node.set("tune_schema", std::move(schema));
             }
-            if (ConfigNode props = m->properties(); !props.is_null()) node.set("properties", std::move(props));
+            if (ConfigNode props = m->properties(); !props.is_null())
+                node.set("properties", std::move(props));
             ConfigNode list = ConfigNode::list();
             for (const PortInfo& p : m->ports()) {
                 ConfigNode port = ConfigNode::map();
@@ -643,7 +655,8 @@ struct DebugServer::Impl {
         if (!built->missing.empty()) {
             std::string list;
             for (const std::string& m : built->missing) list += (list.empty() ? "" : ", ") + m;
-            in.log.log(LogLevel::warn, "debug_server", "model files not found, clients render without them: " + list);
+            in.log.log(LogLevel::warn, "debug_server",
+                       "model files not found, clients render without them: " + list);
         }
         assets = std::move(*built);
         model_doc.set("assets", assets->describe());
@@ -950,7 +963,8 @@ struct DebugServer::Impl {
             const ConfigNode* labels = doc.find("labels");
             if (labels == nullptr) return decode(list[p], doc.find("value"), cmd.value);
             const PortInfo& info = list[p];
-            if (info.type != PortType::vector || labels->kind() != ConfigNode::Kind::list || labels->size() == 0)
+            if (info.type != PortType::vector || labels->kind() != ConfigNode::Kind::list ||
+                labels->size() == 0)
                 return make_error(ErrorCode::invalid_argument,
                                   "'labels' needs a non-empty list on a vector port ('" + info.name + "')");
             for (const ConfigNode& l : labels->items()) {
@@ -958,15 +972,17 @@ struct DebugServer::Impl {
                                     ? std::find(info.labels.begin(), info.labels.end(), l.as_string())
                                     : info.labels.end();
                 if (it == info.labels.end())
-                    return make_error(ErrorCode::invalid_argument,
-                                      "port '" + info.name + "' has no element " +
-                                          (l.kind() == ConfigNode::Kind::string ? l.as_string() : "(non-string)"));
+                    return make_error(
+                        ErrorCode::invalid_argument,
+                        "port '" + info.name + "' has no element " +
+                            (l.kind() == ConfigNode::Kind::string ? l.as_string() : "(non-string)"));
                 cmd.elements.push_back(static_cast<Eigen::Index>(it - info.labels.begin()));
             }
-            if (!read_numbers(doc.find("value"), static_cast<Eigen::Index>(cmd.elements.size()), cmd.value.vector))
-                return make_error(ErrorCode::invalid_argument, "bad value for port '" + info.name + "', expected " +
-                                                                   std::to_string(cmd.elements.size()) +
-                                                                   " finite numbers, one per label");
+            if (!read_numbers(doc.find("value"), static_cast<Eigen::Index>(cmd.elements.size()),
+                              cmd.value.vector))
+                return make_error(ErrorCode::invalid_argument,
+                                  "bad value for port '" + info.name + "', expected " +
+                                      std::to_string(cmd.elements.size()) + " finite numbers, one per label");
             return {};
         }
         return make_error(ErrorCode::unsupported, "unknown op '" + name + "'");

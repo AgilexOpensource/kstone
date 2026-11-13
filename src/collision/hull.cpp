@@ -67,8 +67,8 @@ Result<Hull> convex_hull(const Eigen::Matrix3Xd& points) {
                                   nullptr, err.get());
     if (code == qh_ERRsingular) return degenerate();
     if (code != qh_ERRnone)
-        return make_error(ErrorCode::internal, "convex hull: qhull error " + std::to_string(code) + ": " +
-                                                   first_line(err.get()));
+        return make_error(ErrorCode::internal,
+                          "convex hull: qhull error " + std::to_string(code) + ": " + first_line(err.get()));
 
     Hull hull;
     std::vector<int> remap(static_cast<std::size_t>(points.cols()), -1);

@@ -63,9 +63,9 @@ typedef struct kstone_robot_config {
     double rate_hz;
     const kstone_robot_joint* joints; /* Model joints in q order; mimic followers have nq = nv = 0. */
     size_t joint_count;
-    const double* q0;        /* robot.initial, or the model's neutral configuration (size nq). */
-    const char* params_json; /* robot.params as a JSON object ("{}" when absent). */
-    const char* base_dir;    /* Directory of the configuration file, for relative driver paths. */
+    const double* q0;          /* robot.initial, or the model's neutral configuration (size nq). */
+    const char* params_json;   /* robot.params as a JSON object ("{}" when absent). */
+    const char* base_dir;      /* Directory of the configuration file, for relative driver paths. */
     const char* const* groups; /* Feedback group names (engine.feedback_groups, then "default" if used). */
     size_t group_count;
 } kstone_robot_config;

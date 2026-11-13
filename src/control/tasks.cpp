@@ -1,4 +1,5 @@
 #include "kstone/control/tasks.hpp"
+
 #include "kstone/model/pinocchio.hpp"
 
 #include <Eigen/Cholesky>

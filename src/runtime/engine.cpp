@@ -14,16 +14,15 @@
 #include <vector>
 
 #if defined(__linux__)
+#include <fcntl.h>
+#include <fstream>
 #include <pthread.h>
 #include <sched.h>
-#include <fcntl.h>
 #include <spawn.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
-
-#include <fstream>
 
 extern char** environ;
 #endif
@@ -223,8 +222,13 @@ Status elevate_thread_limits(const ThreadOptions& thread, const Logger& log) {
                           "another way (setcap, limits.d) or run from a terminal");
     ::close(tty);
 
-    std::vector<std::string> args = {"sudo", "-p", "[kstone] sudo password for %u to raise real-time limits: ",
-                                     "--", "prlimit", "--pid", std::to_string(::getpid())};
+    std::vector<std::string> args = {"sudo",
+                                     "-p",
+                                     "[kstone] sudo password for %u to raise real-time limits: ",
+                                     "--",
+                                     "prlimit",
+                                     "--pid",
+                                     std::to_string(::getpid())};
     std::string what;
     if (need.rtprio) {
         args.push_back("--rtprio=" + std::to_string(thread.priority));
@@ -237,11 +241,14 @@ Status elevate_thread_limits(const ThreadOptions& thread, const Logger& log) {
     std::vector<char*> argv;
     for (std::string& a : args) argv.push_back(a.data());
     argv.push_back(nullptr);
-    if (log.enabled(LogLevel::info)) log.log(LogLevel::info, "engine", "elevate: running sudo prlimit for " + what);
+    if (log.enabled(LogLevel::info))
+        log.log(LogLevel::info, "engine", "elevate: running sudo prlimit for " + what);
 
     pid_t pid = 0;
     const int rc = ::posix_spawnp(&pid, "sudo", nullptr, nullptr, argv.data(), environ);
-    if (rc != 0) return make_error(ErrorCode::io_error, std::string("elevate: cannot start sudo: ") + std::strerror(rc));
+    if (rc != 0)
+        return make_error(ErrorCode::io_error,
+                          std::string("elevate: cannot start sudo: ") + std::strerror(rc));
     int status = 0;
     while (::waitpid(pid, &status, 0) < 0) {
         if (errno != EINTR)
@@ -284,9 +291,11 @@ Result<FeedbackLayout> resolve_feedback_groups(const Model& model, const std::ve
     for (std::size_t g = 0; g < groups.size(); ++g) {
         const FeedbackGroup& fg = groups[g];
         const std::string label = "engine: feedback group '" + fg.name + "'";
-        if (fg.name.empty()) return make_error(ErrorCode::invalid_argument, "engine: feedback group name is empty");
+        if (fg.name.empty())
+            return make_error(ErrorCode::invalid_argument, "engine: feedback group name is empty");
         if (fg.name == "default")
-            return make_error(ErrorCode::invalid_argument, "engine: feedback group name 'default' is reserved");
+            return make_error(ErrorCode::invalid_argument,
+                              "engine: feedback group name 'default' is reserved");
         if (std::find(out.names.begin(), out.names.end(), fg.name) != out.names.end())
             return make_error(ErrorCode::invalid_argument, label + " is declared twice");
         if (fg.joints.empty()) return make_error(ErrorCode::invalid_argument, label + " has no joints");
@@ -295,8 +304,9 @@ Result<FeedbackLayout> resolve_feedback_groups(const Model& model, const std::ve
         const auto assign = [&](const JointInfo& j) {
             std::size_t& slot = out.joint_group[j.id];
             if (slot != none && slot != g && st)
-                st = make_error(ErrorCode::invalid_argument, "engine: joint '" + j.name + "' is in feedback groups '" +
-                                                                 groups[slot].name + "' and '" + fg.name + "'");
+                st = make_error(ErrorCode::invalid_argument,
+                                "engine: joint '" + j.name + "' is in feedback groups '" + groups[slot].name +
+                                    "' and '" + fg.name + "'");
             slot = g;
         };
         for (const std::string& name : fg.joints) {
@@ -314,7 +324,8 @@ Result<FeedbackLayout> resolve_feedback_groups(const Model& model, const std::ve
                         matched = true;
                     }
                 if (!matched)
-                    return make_error(ErrorCode::invalid_argument, label + ": '" + name + "' matches no joint");
+                    return make_error(ErrorCode::invalid_argument,
+                                      label + ": '" + name + "' matches no joint");
             }
             if (!st) return std::move(st).error();
         }
@@ -378,20 +389,20 @@ struct Engine::Impl {
     struct Group {
         std::string name;
         std::vector<std::pair<Index, Index>> q_segments;  ///< (start, size) in q.
-        std::vector<Index> dofs;                           ///< Velocity indices.
-        Mask mask;                                         ///< Size nv.
+        std::vector<Index> dofs;                          ///< Velocity indices.
+        Mask mask;                                        ///< Size nv.
         bool fresh{true};
         bool attached{false};
         bool stale_last{false};
-        bool hold_pending{false};         ///< Targets set while stale must be dropped on the next fresh cycle.
-        bool refresh{false};              ///< estimate(): tracking error recomputed this cycle.
+        bool hold_pending{false};  ///< Targets set while stale must be dropped on the next fresh cycle.
+        bool refresh{false};       ///< estimate(): tracking error recomputed this cycle.
         std::int64_t fresh_since_ns{-1};  ///< Clock time the group turned fresh while detached; -1 = stale.
         std::int64_t err_stamp_ns{-1};
     };
     std::vector<Group> groups;
     std::vector<std::size_t> joint_group;  ///< Per JointId.
     std::vector<std::size_t> dof_group;    ///< Per dof.
-    bool has_default{false};               ///< The last group is "default" (falls back to RobotState::stamp_ns).
+    bool has_default{false};  ///< The last group is "default" (falls back to RobotState::stamp_ns).
     EngineStats stats;
     RobotState state;
     RobotCommand command;
@@ -402,8 +413,8 @@ struct Engine::Impl {
     std::atomic<bool> resume_pending{false};
     std::atomic<double> pending_rate{0.0};  ///< > 0: rate_hz to switch to at the next cycle.
     double held_time{0.0};                  ///< Engine time spent paused; module time is `now` minus this.
-    bool stepped{false};  ///< A cycle has succeeded; `now` must not go below stats.time after that.
-    bool fresh{true};     ///< All groups.
+    bool stepped{false};   ///< A cycle has succeeded; `now` must not go below stats.time after that.
+    bool fresh{true};      ///< All groups.
     bool attached{false};  ///< All groups.
     bool written{false};
 
@@ -548,7 +559,8 @@ struct Engine::Impl {
     /// Same for group g's joints only; resynchronizes the modules driving them (rebase: dropping held targets).
     void sync_group(std::size_t g, bool counted, bool rebase) {
         Group& grp = groups[g];
-        for (const auto& [start, size] : grp.q_segments) ideal_q.segment(start, size) = state.q.segment(start, size);
+        for (const auto& [start, size] : grp.q_segments)
+            ideal_q.segment(start, size) = state.q.segment(start, size);
         derive_mimics(ideal_q);
         for (const auto& p : position_limits)
             if (joint_group[p.joint] == g) ideal_q[p.iq] = std::clamp(ideal_q[p.iq], p.lower, p.upper);
@@ -719,7 +731,8 @@ Result<Engine> Engine::create(ModuleSet modules, std::shared_ptr<RobotInterface>
         return make_error(ErrorCode::invalid_argument, "engine: safety.tolerance must be >= 0");
     if (auto s = validate_thread(options.thread); !s) return std::move(s).error();
     if (!modules.configured()) {
-        if (auto s = modules.set_feedback_timeout(options.feedback_timeout_s); !s) return std::move(s).error();
+        if (auto s = modules.set_feedback_timeout(options.feedback_timeout_s); !s)
+            return std::move(s).error();
         if (auto s = modules.configure(); !s) return std::move(s).error();
     }
     auto impl = std::make_unique<Impl>(std::move(modules), std::move(robot), options, context);
@@ -741,7 +754,8 @@ Result<Engine> Engine::create(ModuleSet modules, std::shared_ptr<RobotInterface>
         Impl::Group& grp = impl->groups[i];
         grp.attached = impl->timeout_ns <= 0;
         const std::int64_t stamp = impl->group_stamp(i);
-        if (!grp.attached && stamp >= 0 && created_ns - stamp <= impl->timeout_ns) grp.fresh_since_ns = created_ns;
+        if (!grp.attached && stamp >= 0 && created_ns - stamp <= impl->timeout_ns)
+            grp.fresh_since_ns = created_ns;
         grp.hold_pending = !grp.attached && grp.fresh_since_ns < 0;
         impl->attached = impl->attached && grp.attached;
     }
@@ -908,7 +922,8 @@ Status Engine::run(double duration_s, const std::atomic<bool>* stop) {
         }
         deadline += d.dt_ns;
         std::int64_t remaining = deadline - clock.now_ns();
-        if (remaining > d.dt_ns) {  // Clock stalled or went back: wait one period instead of the accumulated gap.
+        if (remaining >
+            d.dt_ns) {  // Clock stalled or went back: wait one period instead of the accumulated gap.
             remaining = d.dt_ns;
             deadline = clock.now_ns() + remaining;
         }

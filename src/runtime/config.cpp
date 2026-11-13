@@ -94,7 +94,9 @@ ParamSchema<EngineConfig> engine_schema() {
     group.field("joints", &FeedbackGroup::joints)
         .required()
         .non_empty()
-        .doc("Names or fnmatch patterns; a joint belongs to at most one group, followers follow their leader.");
+        .doc(
+            "Names or fnmatch patterns; a joint belongs to at most one group, followers follow their "
+            "leader.");
     engine.field("feedback_groups", &EngineOptions::feedback_groups, std::move(group))
         .doc("Ungrouped joints form the last group, \"default\", which falls back to the state stamp.");
     engine.field("safety", &EngineOptions::safety, std::move(safety));

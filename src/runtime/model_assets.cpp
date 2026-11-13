@@ -364,8 +364,10 @@ Result<ModelAssets> build_model_assets(const ModelSource& source, const Resource
     assets.missing.erase(std::unique(assets.missing.begin(), assets.missing.end()), assets.missing.end());
 
     assets.document = std::move(rewritten);
-    files.emplace(assets.model,
-                  ModelAssets::File{assets.model, {}, sha256_hex(assets.document).substr(0, 16), assets.document.size(), {}});
+    files.emplace(
+        assets.model,
+        ModelAssets::File{
+            assets.model, {}, sha256_hex(assets.document).substr(0, 16), assets.document.size(), {}});
     std::string manifest;
     for (auto& [name, f] : files) {
         manifest += name + '\n' + f.stamp + '\n' + std::to_string(f.size) + '\n';
