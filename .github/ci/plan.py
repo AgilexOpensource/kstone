@@ -1,4 +1,4 @@
-"""Turns the ci workflow inputs into the job lists, checks that the docs match them, and extracts the README C++ recipe."""
+"""Turns the ci workflow inputs into the job lists, checks that the docs match them, and extracts the source-build recipe from docs/install.md."""
 
 from __future__ import annotations
 
@@ -46,15 +46,20 @@ def check_docs() -> None:
         text = (ROOT / doc).read_text()
         if f"Ubuntu {UBUNTU}" not in text or f"Python {PYTHON}" not in text:
             fail(f"{doc} does not name the tested Ubuntu {UBUNTU} and Python {PYTHON}")
-    if cpp_block("README.md") != cpp_block("README.zh-CN.md"):
-        fail("the C++ recipe in README.zh-CN.md differs from README.md")
+    if cpp_block("docs/install.md") != cpp_block("docs/zh-CN/install.md"):
+        fail("the source-build recipe in docs/zh-CN/install.md differs from docs/install.md")
 
 
-def cpp_block(readme: str) -> str:
-    text = (ROOT / readme).read_text()
-    match = re.search(r"^### C\+\+\n.*?^```bash\n(.*?)^```", text, re.M | re.S)
+# Doc -> heading of the section whose first bash block is the source-build recipe.
+RECIPE_HEADINGS = {"docs/install.md": "## Building from source", "docs/zh-CN/install.md": "## 源码编译"}
+
+
+def cpp_block(doc: str) -> str:
+    text = (ROOT / doc).read_text()
+    heading = RECIPE_HEADINGS[doc]
+    match = re.search(rf"^{re.escape(heading)}\n.*?^```bash\n(.*?)^```", text, re.M | re.S)
     if not match:
-        fail(f"no bash block under '### C++' in {readme}")
+        fail(f"no bash block under '{heading}' in {doc}")
     return match.group(1)
 
 
@@ -62,10 +67,10 @@ SOURCE_PARTS = ("apt", "deps", "kstone")
 
 
 def source_script(part: str) -> str:
-    """One part of the README C++ recipe: apt, deps (Coal and Pinocchio, cacheable) or kstone in the checkout, tested."""
+    """One part of the docs/install.md source-build recipe: apt, deps (Coal and Pinocchio, cacheable) or kstone in the checkout, tested."""
     parts: dict[str, list[str]] = {p: [] for p in SOURCE_PARTS}
     prefix, current = None, "apt"
-    for line in cpp_block("README.md").splitlines():
+    for line in cpp_block("docs/install.md").splitlines():
         if line.startswith("sudo apt install "):
             line = "sudo apt-get update && sudo apt-get install -y " + line.removeprefix("sudo apt install ")
         elif line.startswith("PREFIX="):
@@ -75,7 +80,7 @@ def source_script(part: str) -> str:
             line, current = 'ln -s "$GITHUB_WORKSPACE" kstone', "kstone"
         parts[current].append(line)
     if not prefix or not parts["kstone"] or not any("apt-get install" in s for s in parts["apt"]):
-        fail("the README C++ recipe no longer has the expected apt install, PREFIX and kstone clone lines")
+        fail("the docs/install.md source-build recipe no longer has the expected apt install, PREFIX and kstone clone lines")
     parts["kstone"] += [
         "ctest --test-dir kstone/build --output-on-failure",
         'cmake -S kstone/tests/consumer -B consumer -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$PREFIX"',

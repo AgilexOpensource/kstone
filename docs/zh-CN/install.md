@@ -91,11 +91,32 @@ target_link_libraries(my_node PRIVATE kstone::kstone)
 <a id="source"></a>
 ## 源码编译
 
-[ci](../../.github/workflows/ci.yml) 工作流的 `source` job 在 Ubuntu 22.04 上用 apt 的 Boost、Eigen、urdfdom 运行 [README](../../README.zh-CN.md#c) 里的步骤（Coal 3.0.3、Pinocchio 4.1.0）。
+从源码构建 Coal 和 Pinocchio，再构建 kstone，都装到同一个前缀：
 
-需要 Boost、Eigen、urdfdom 和 assimp（Coal 依赖），如 `libboost-all-dev libeigen3-dev liburdfdom-dev libassimp-dev`，或使用 ROS 自带的 urdfdom。
+```bash
+sudo apt install build-essential cmake git libboost-all-dev libeigen3-dev liburdfdom-dev libassimp-dev libqhull-dev
+PREFIX=$HOME/opt/kstone
 
-- urdfdom 来自 ROS 时，配置 Pinocchio 和 kstone 时传 `-DCMAKE_PREFIX_PATH="$PREFIX;/opt/ros/humble"`。
+git clone --recursive --depth 1 --branch v3.0.3 https://github.com/coal-library/coal.git
+cmake -S coal -B coal/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PREFIX \
+      -DBUILD_PYTHON_INTERFACE=OFF -DBUILD_TESTING=OFF -DCOAL_HAS_QHULL=OFF
+cmake --build coal/build -j"$(nproc)" && cmake --install coal/build
+
+git clone --recursive --depth 1 --branch v4.1.0 https://github.com/stack-of-tasks/pinocchio.git
+cmake -S pinocchio -B pinocchio/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PREFIX \
+      -DCMAKE_PREFIX_PATH=$PREFIX -DBUILD_PYTHON_INTERFACE=OFF -DBUILD_TESTING=OFF \
+      -DBUILD_WITH_URDF_SUPPORT=ON -DBUILD_WITH_COLLISION_SUPPORT=ON
+cmake --build pinocchio/build -j"$(nproc)" && cmake --install pinocchio/build
+
+git clone --recursive https://github.com/AgilexOpensource/kstone.git
+cmake -S kstone -B kstone/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=$PREFIX -DCMAKE_INSTALL_PREFIX=$PREFIX
+cmake --build kstone/build -j"$(nproc)" && cmake --install kstone/build
+```
+
+[ci](../../.github/workflows/ci.yml) 工作流的 `source` job 在 Ubuntu 22.04 上运行这些命令，再跑 ctest 和 [tests/consumer](../../tests/consumer)。
+
+- Boost、Eigen、urdfdom 和 assimp（Coal 依赖）来自 apt。改用 ROS 自带的 urdfdom 时，配置 Pinocchio 和 kstone 时传 `-DCMAKE_PREFIX_PATH="$PREFIX;/opt/ros/humble"`。
+- 不想编译 Pinocchio 和 Coal 时，用 [ROS（apt）](#ros)，或按 [C++](cpp.md#build-from-source) 在虚拟环境里用 pip wheel；没有 ROS 或源码安装时 CMake 会自动用这些 wheel。
 
 在自己的 CMake 项目里链接 kstone 见 [C++](cpp.md#using-kstone-from-your-cmake-project)。
 

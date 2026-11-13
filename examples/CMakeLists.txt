@@ -14,7 +14,7 @@ if(KSTONE_BUILD_TESTS)
   add_test(NAME example/cpp_ik
            COMMAND ${prefix} $<TARGET_FILE:kstone_example_ik> ${CMAKE_CURRENT_SOURCE_DIR}/omni_dual_arm/omni_dual_arm.urdf)
   set_tests_properties(example/cpp_ik PROPERTIES PASS_REGULAR_EXPRESSION "converged in")
+  # Exit code only: a pass regex overrides it, and "reached after" also matches "not reached after".
   add_test(NAME example/cpp_engine
            COMMAND ${prefix} $<TARGET_FILE:kstone_example_engine> ${PROJECT_SOURCE_DIR}/tests/fixtures/arm.urdf)
-  set_tests_properties(example/cpp_engine PROPERTIES PASS_REGULAR_EXPRESSION "reached after")
 endif()

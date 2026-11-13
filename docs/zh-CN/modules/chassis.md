@@ -31,7 +31,7 @@
 
 ### pose_limits（只能 tune）
 
-位姿模式的运行时限制：`linear_`/`angular_` 加 `velocity`、`acceleration`、`deceleration`、`reversal_deceleration`、`jerk`，0 = 不限；全为 0 时直接输出未整形的速度。`planner_mode`：
+位姿模式的运行时限制：`max_linear_velocity`、`max_linear_acceleration`、`max_linear_deceleration`、`max_linear_reversal_deceleration`、`max_linear_jerk` 及对应的 `max_angular_*` 字段，0 = 不限；全为 0 时直接输出未整形的速度。`planner_mode`：
 
 - `axis_phase`（默认）：全向底盘 x/y/yaw 相位同步，不能同步时退回时间同步。
 - `axis_time`：全向底盘时间同步。

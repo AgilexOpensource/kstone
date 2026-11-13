@@ -29,7 +29,7 @@ on:
         type: boolean
         default: false
       source:
-        description: "source: the README C++ recipe"
+        description: "source: the docs/install.md source-build recipe"
         type: boolean
         default: false
       tag:
@@ -214,7 +214,7 @@ jobs:
           cd "$RUNNER_TEMP" && KSTONE_TOKEN= gdb -batch -ex run -ex bt -ex "info sharedlibrary" \
             --args "$PY" "$GITHUB_WORKSPACE/python/tests/test_binding.py" "$GITHUB_WORKSPACE/tests/fixtures"
 
-  # The README C++ recipe: Pinocchio and Coal from source on apt Boost, Eigen and urdfdom.
+  # The docs/install.md source-build recipe: Pinocchio and Coal from source on apt Boost, Eigen and urdfdom.
   source:
     needs: plan
     if: needs.plan.outputs.source != '[]'
@@ -229,7 +229,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
-      - name: Extract the README recipe
+      - name: Extract the source-build recipe
         id: recipe
         run: |
           for p in apt deps kstone; do python3 .github/ci/plan.py source-script $p > "$RUNNER_TEMP/$p.sh"; done
@@ -238,7 +238,7 @@ jobs:
       - name: apt dependencies
         working-directory: ${{ runner.temp }}/src
         run: bash "$RUNNER_TEMP/apt.sh"
-      # Keyed on the Coal and Pinocchio recipe lines, so a version or flag change in the README rebuilds them.
+      # Keyed on the Coal and Pinocchio recipe lines, so a version or flag change in docs/install.md rebuilds them.
       - uses: actions/cache/restore@v6
         id: deps
         with:

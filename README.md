@@ -8,7 +8,7 @@ It is a C++17 library with a Python package, a `kstone` command-line tool and a 
 
 ## Install
 
-kstone is installed from source and needs a C++17 compiler. CI tests Ubuntu 22.04 on x86_64 and aarch64 (such as Jetson with JetPack 6) with Python 3.10 and ROS 2 Humble; other Linux setups are not tested yet.
+kstone is installed from source and needs a C++17 compiler. CI tests Ubuntu 22.04 on x86_64 and aarch64 (such as Jetson with JetPack 6) with Python 3.10 and ROS 2 Humble; other Linux setups are not tested.
 
 ### Python
 
@@ -42,34 +42,7 @@ A package in the same workspace adds `<depend>kstone</depend>` and uses `find_pa
 
 ### C++
 
-Build Pinocchio and Coal from source, then kstone, all into one prefix:
-
-```bash
-sudo apt install build-essential cmake git libboost-all-dev libeigen3-dev liburdfdom-dev libassimp-dev libqhull-dev
-PREFIX=$HOME/opt/kstone
-
-git clone --recursive --depth 1 --branch v3.0.3 https://github.com/coal-library/coal.git
-cmake -S coal -B coal/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PREFIX \
-      -DBUILD_PYTHON_INTERFACE=OFF -DBUILD_TESTING=OFF -DCOAL_HAS_QHULL=OFF
-cmake --build coal/build -j"$(nproc)" && cmake --install coal/build
-
-git clone --recursive --depth 1 --branch v4.1.0 https://github.com/stack-of-tasks/pinocchio.git
-cmake -S pinocchio -B pinocchio/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PREFIX \
-      -DCMAKE_PREFIX_PATH=$PREFIX -DBUILD_PYTHON_INTERFACE=OFF -DBUILD_TESTING=OFF \
-      -DBUILD_WITH_URDF_SUPPORT=ON -DBUILD_WITH_COLLISION_SUPPORT=ON
-cmake --build pinocchio/build -j"$(nproc)" && cmake --install pinocchio/build
-
-git clone --recursive https://github.com/AgilexOpensource/kstone.git
-cmake -S kstone -B kstone/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=$PREFIX -DCMAKE_INSTALL_PREFIX=$PREFIX
-cmake --build kstone/build -j"$(nproc)" && cmake --install kstone/build
-```
-
-Shortcuts that skip building Pinocchio and Coal:
-
-- ROS apt: `sudo apt install ros-humble-pinocchio libqhull-dev`, `source /opt/ros/humble/setup.bash`, then build kstone with CMake as above.
-- pip wheels: `pip install pin coal cmeel-eigen cmeel-urdfdom-headers` in a virtual environment, then build kstone with CMake from that venv; it falls back to the wheels when no ROS or source install is found. Full commands are in [C++](docs/cpp.md#build-from-source).
-
-Details and tested versions are in [Installation](docs/install.md). Linking from your project, CMake options and the C++ API are in [C++](docs/cpp.md).
+Build Coal and Pinocchio from source, then kstone, into one prefix with the commands in [Building from source](docs/install.md#source). With ROS 2 Humble, `ros-humble-pinocchio` from apt replaces the source builds, see [ROS (apt)](docs/install.md#ros). Linking from your project, CMake options and the C++ API are in [C++](docs/cpp.md).
 
 ### Running the examples
 

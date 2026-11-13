@@ -31,7 +31,7 @@ Top level: `center_in_root` (fixed pose of the control centre in the root frame)
 
 ### pose_limits (tune only)
 
-Runtime limits for pose mode: `linear_`/`angular_` plus `velocity`, `acceleration`, `deceleration`, `reversal_deceleration`, `jerk`; 0 = unbounded. When all are 0 the unshaped velocity is output directly. `planner_mode`:
+Runtime limits for pose mode: `max_linear_velocity`, `max_linear_acceleration`, `max_linear_deceleration`, `max_linear_reversal_deceleration`, `max_linear_jerk` and the matching `max_angular_*` fields; 0 = unbounded. When all are 0 the unshaped velocity is output directly. `planner_mode`:
 
 - `axis_phase` (default): omni, x/y/yaw phase-synchronised, falling back to time sync.
 - `axis_time`: omni, time-synchronised.

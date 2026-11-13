@@ -131,7 +131,7 @@ modules: !include modules.yaml  # path relative to this file
 Keys across modules follow these rules:
 
 - Durations end in `_s` (seconds); other units are given in each module's docs.
-- `max_` marks an upper bound, except inside `*_limits` groups, where every field is already a bound.
+- `max_` marks an upper bound. Groups of per-axis bounds drop it: `model.joint_limits` (`velocity`, `position.lower` / `upper`) and frame_target `trajectory.position` / `trajectory.orientation` (`velocity`, `acceleration`, ...). The chassis `pose_limits` (tune only) keeps `max_`, because its fields share their names with the chassis `max_*` fields they start from.
 - `_scale` is a dimensionless ratio; `_factor` is a coefficient with units (e.g. `acceleration_factor`, 1/s).
 - `speed` is a scalar magnitude; `velocity` is a vector, a per-axis rate or a limit on one.
 - Pose quantities are `position` / `orientation`; rates and limits are `linear` / `angular`.

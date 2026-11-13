@@ -134,7 +134,7 @@ modules: !include modules.yaml  # path relative to this file
 各模块的键遵循以下规则：
 
 - 时长以 `_s` 结尾（秒）；其他单位见各模块文档。
-- `max_` 表示上限；`*_limits` 组内字段本身就是上限，不再加 `max_`。
+- `max_` 表示上限。逐轴上限组内的字段不加 `max_`：`model.joint_limits`（`velocity`、`position.lower` / `upper`）和 frame_target 的 `trajectory.position` / `trajectory.orientation`（`velocity`、`acceleration` 等）。chassis 的 `pose_limits`（仅可调参）保留 `max_`，因为其字段与它所取初值的 chassis `max_*` 字段同名。
 - `_scale` 是无量纲比例；`_factor` 是带单位的系数（如 `acceleration_factor`，1/s）。
 - `speed` 是标量大小；`velocity` 是向量、逐轴速率或其限制。
 - 位姿量用 `position` / `orientation`；速率和限制用 `linear` / `angular`。

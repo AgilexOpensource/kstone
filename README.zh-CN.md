@@ -8,7 +8,7 @@ kstone 为机器人求解逆运动学，并把它作为控制循环运行。在�
 
 ## 安装
 
-kstone 从源码安装，需要 C++17 编译器。CI 只测试 Ubuntu 22.04 x86_64 和 aarch64（如 JetPack 6 的 Jetson）、Python 3.10 和 ROS 2 Humble，其他 Linux 环境暂未测试。
+kstone 从源码安装，需要 C++17 编译器。CI 只测试 Ubuntu 22.04 x86_64 和 aarch64（如 JetPack 6 的 Jetson）、Python 3.10 和 ROS 2 Humble，其他 Linux 环境未经测试。
 
 ### Python
 
@@ -42,34 +42,7 @@ source install/setup.bash
 
 ### C++
 
-从源码构建 Pinocchio 和 Coal，再构建 kstone，都装到同一个前缀：
-
-```bash
-sudo apt install build-essential cmake git libboost-all-dev libeigen3-dev liburdfdom-dev libassimp-dev libqhull-dev
-PREFIX=$HOME/opt/kstone
-
-git clone --recursive --depth 1 --branch v3.0.3 https://github.com/coal-library/coal.git
-cmake -S coal -B coal/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PREFIX \
-      -DBUILD_PYTHON_INTERFACE=OFF -DBUILD_TESTING=OFF -DCOAL_HAS_QHULL=OFF
-cmake --build coal/build -j"$(nproc)" && cmake --install coal/build
-
-git clone --recursive --depth 1 --branch v4.1.0 https://github.com/stack-of-tasks/pinocchio.git
-cmake -S pinocchio -B pinocchio/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PREFIX \
-      -DCMAKE_PREFIX_PATH=$PREFIX -DBUILD_PYTHON_INTERFACE=OFF -DBUILD_TESTING=OFF \
-      -DBUILD_WITH_URDF_SUPPORT=ON -DBUILD_WITH_COLLISION_SUPPORT=ON
-cmake --build pinocchio/build -j"$(nproc)" && cmake --install pinocchio/build
-
-git clone --recursive https://github.com/AgilexOpensource/kstone.git
-cmake -S kstone -B kstone/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=$PREFIX -DCMAKE_INSTALL_PREFIX=$PREFIX
-cmake --build kstone/build -j"$(nproc)" && cmake --install kstone/build
-```
-
-不想编译 Pinocchio 和 Coal 时可以用这两种快捷方式：
-
-- ROS apt：`sudo apt install ros-humble-pinocchio libqhull-dev`，`source /opt/ros/humble/setup.bash`，再按上面的命令用 CMake 构建 kstone。
-- pip wheel：在虚拟环境里 `pip install pin coal cmeel-eigen cmeel-urdfdom-headers`，在该 venv 里用 CMake 构建 kstone；没有 ROS 或源码安装时会自动用这些 wheel。完整命令见 [C++](docs/zh-CN/cpp.md#build-from-source)。
-
-细节和测过的版本见[安装](docs/zh-CN/install.md)。在自己的项目里链接、CMake 选项和 C++ API 见 [C++](docs/zh-CN/cpp.md)。
+按[源码编译](docs/zh-CN/install.md#source)里的命令从源码构建 Coal 和 Pinocchio，再构建 kstone，都装到同一个前缀。使用 ROS 2 Humble 时可以用 apt 的 `ros-humble-pinocchio` 代替源码编译，见 [ROS（apt）](docs/zh-CN/install.md#ros)。在自己的项目里链接、CMake 选项和 C++ API 见 [C++](docs/zh-CN/cpp.md)。
 
 ### 运行示例
 

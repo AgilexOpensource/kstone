@@ -89,11 +89,32 @@ The `ros` job of the [ci](../.github/workflows/ci.yml) workflow runs `colcon bui
 <a id="source"></a>
 ## Building from source
 
-The `source` job of the [ci](../.github/workflows/ci.yml) workflow runs the [README](../README.md#c) recipe (Coal 3.0.3, Pinocchio 4.1.0) on Ubuntu 22.04 with apt Boost, Eigen and urdfdom.
+Build Coal and Pinocchio from source, then kstone, all into one prefix:
 
-Boost, Eigen, urdfdom and assimp (needed by Coal) are required, for example `libboost-all-dev libeigen3-dev liburdfdom-dev libassimp-dev`, or the urdfdom shipped with ROS.
+```bash
+sudo apt install build-essential cmake git libboost-all-dev libeigen3-dev liburdfdom-dev libassimp-dev libqhull-dev
+PREFIX=$HOME/opt/kstone
 
-- If urdfdom comes from ROS, pass `-DCMAKE_PREFIX_PATH="$PREFIX;/opt/ros/humble"` when configuring Pinocchio and kstone.
+git clone --recursive --depth 1 --branch v3.0.3 https://github.com/coal-library/coal.git
+cmake -S coal -B coal/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PREFIX \
+      -DBUILD_PYTHON_INTERFACE=OFF -DBUILD_TESTING=OFF -DCOAL_HAS_QHULL=OFF
+cmake --build coal/build -j"$(nproc)" && cmake --install coal/build
+
+git clone --recursive --depth 1 --branch v4.1.0 https://github.com/stack-of-tasks/pinocchio.git
+cmake -S pinocchio -B pinocchio/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PREFIX \
+      -DCMAKE_PREFIX_PATH=$PREFIX -DBUILD_PYTHON_INTERFACE=OFF -DBUILD_TESTING=OFF \
+      -DBUILD_WITH_URDF_SUPPORT=ON -DBUILD_WITH_COLLISION_SUPPORT=ON
+cmake --build pinocchio/build -j"$(nproc)" && cmake --install pinocchio/build
+
+git clone --recursive https://github.com/AgilexOpensource/kstone.git
+cmake -S kstone -B kstone/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=$PREFIX -DCMAKE_INSTALL_PREFIX=$PREFIX
+cmake --build kstone/build -j"$(nproc)" && cmake --install kstone/build
+```
+
+The `source` job of the [ci](../.github/workflows/ci.yml) workflow runs these commands on Ubuntu 22.04, then ctest and [tests/consumer](../tests/consumer).
+
+- Boost, Eigen, urdfdom and assimp (needed by Coal) come from apt. To use the urdfdom shipped with ROS instead, pass `-DCMAKE_PREFIX_PATH="$PREFIX;/opt/ros/humble"` when configuring Pinocchio and kstone.
+- To skip building Pinocchio and Coal, use [ROS (apt)](#ros), or the pip wheels in a virtual environment as shown in [C++](cpp.md#build-from-source); with no ROS or source install, CMake falls back to the wheels.
 
 Linking kstone into your own CMake project is described in [C++](cpp.md#using-kstone-from-your-cmake-project).
 

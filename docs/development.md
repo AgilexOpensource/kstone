@@ -56,7 +56,7 @@ build/bench/bench/kstone_bench
 | presets | `check.sh` debug, asan and tsan |
 | pip | builds once from the sdist as `pip install git+...` does, with tests on, runs ctest and [tests/consumer](../tests/consumer) on that build, then [test_wheel.sh](../scripts/test_wheel.sh) ([test_binding.py](../python/tests/test_binding.py), the `kstone` command, the [Python examples](../examples/python), the type-stub check), then installs the `pin` Python package of the same version and runs `pip check` and the tests again. Python 3.10 and Pinocchio 4.0, as in ROS 2 Humble |
 | isolated | an isolated `pip install` of the sdist, as an end user would do it, with the newest allowed Pinocchio; prints a backtrace on a crash |
-| source | runs the README C++ recipe, extracted by `plan.py source-script`, then ctest and [tests/consumer](../tests/consumer). The Coal and Pinocchio install is cached, keyed on their recipe lines, so only a change to those lines rebuilds them |
+| source | runs the [Building from source](install.md#source) recipe, extracted by `plan.py source-script`, then ctest and [tests/consumer](../tests/consumer). The Coal and Pinocchio install is cached, keyed on their recipe lines, so only a change to those lines rebuilds them |
 | ros | Pinocchio and Coal from both ROS apt and pip in the `ros:humble` image: `colcon build` and `colcon test` must use the ROS ones, then [tests/consumer](../tests/consumer) against the install space; `pip install` with ROS sourced must use the pip wheels |
 | release | only when `tag` is set |
 

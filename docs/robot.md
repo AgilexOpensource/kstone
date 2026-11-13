@@ -57,7 +57,7 @@ thread:
 
 ## Debug server
 
-`kstone run --serve` starts the debug server, default `127.0.0.1:7311`. It streams telemetry and supports tuning and remote commands. One client at a time is the control source; ports your code writes keep priority over remote writes.
+`kstone run --serve` starts the debug server, default `127.0.0.1:7311`. It streams telemetry and supports tuning and remote commands. Clients are equal and the last write wins. A motion port your own code writes is held for `api_hold_s` (default 1 s), and server `set_port` on that module's motion ports gets `api_owned`; see [debug-protocol.md](debug-protocol.md).
 
 - Binding to a non-loopback address requires a token of at least 16 bytes, from `--token-file` or `$KSTONE_TOKEN`.
 - The protocol is not encrypted and the token is sent in clear text. Across untrusted networks, use an SSH tunnel or a VPN.

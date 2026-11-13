@@ -61,7 +61,7 @@ thread:
 <a id="debug-server"></a>
 ## 调试服务
 
-`kstone run --serve` 启动调试服务，默认 `127.0.0.1:7311`，提供遥测流、调参和远程命令。同一时刻只有一个客户端是控制源；代码写入的端口优先于远程写入。
+`kstone run --serve` 启动调试服务，默认 `127.0.0.1:7311`，提供遥测流、调参和远程命令。各客户端平等，以最后一次写入为准。自己的代码写入运动端口后保持 `api_hold_s`（默认 1 s），期间服务端对该模块运动端口的 `set_port` 返回 `api_owned`；见 [debug-protocol.md](debug-protocol.md)。
 
 - 绑定非回环地址需要至少 16 字节的 token，来自 `--token-file` 或 `$KSTONE_TOKEN`。
 - 协议不加密，token 明文传输。跨不可信网络时套 SSH 隧道或 VPN。

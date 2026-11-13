@@ -45,7 +45,11 @@ int main(int argc, char** argv) {
         return 2;
     }
     const std::filesystem::path urdf = std::filesystem::absolute(argv[1]);
-    auto model = Model::load(ModelSource::file(urdf.string()), {}, Context::defaults());
+    // The host owns the clock: the engine and the robot stamps both read it.
+    auto clock = std::make_shared<ManualClock>();
+    Context context = Context::defaults();
+    context.clock = clock;
+    auto model = Model::load(ModelSource::file(urdf.string()), {}, context);
     if (!model) {
         std::fprintf(stderr, "load: %s\n", model.error().message.c_str());
         return 1;
@@ -60,11 +64,10 @@ modules:
 )";
     auto config = parse_yaml(text, "inline.yaml");
     if (!config) return 1;
-    auto robot =
-        std::make_shared<DelayedRobot>((*model)->neutral(), (*model)->nv(), Context::defaults().clock);
+    auto robot = std::make_shared<DelayedRobot>((*model)->neutral(), (*model)->nv(), clock);
     EngineLoadOptions options;
     options.robot = robot;
-    auto engine = build_engine(*config, urdf.parent_path(), options);
+    auto engine = build_engine(*config, urdf.parent_path(), options, context);
     if (!engine) {
         std::fprintf(stderr, "engine: %s\n", engine.error().message.c_str());
         return 1;
@@ -78,8 +81,9 @@ modules:
     const auto& joints = (*model)->joints();
     const Eigen::Index j1 = joints[*(*model)->joint_id("j1")].idx_q;
     const Eigen::Index j2 = joints[*(*model)->joint_id("j2")].idx_q;
-    // The host owns the clock; Engine::run() would pace the same loop by itself.
+    // Engine::run() would pace the same loop by itself on a steady clock.
     for (int i = 0; i <= 300; ++i) {
+        clock->set_ns(std::llround(i * engine->dt() * 1e9));
         if (const Status s = engine->step(i * engine->dt()); !s) {
             std::fprintf(stderr, "step: %s\n", s.error().message.c_str());
             return 1;

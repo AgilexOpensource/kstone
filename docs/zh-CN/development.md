@@ -56,7 +56,7 @@ build/bench/bench/kstone_bench
 | presets | 跑 `check.sh` debug、asan、tsan |
 | pip | 像 `pip install git+...` 一样从 sdist 构建一次（打开测试），在这次构建上跑 ctest 和 [tests/consumer](../../tests/consumer)，再运行 [test_wheel.sh](../../scripts/test_wheel.sh)（[test_binding.py](../../python/tests/test_binding.py)、`kstone` 命令、[Python 示例](../../examples/python)、类型存根检查），最后装上同版本的 `pin` Python 包，运行 `pip check` 并再测一遍。用 Python 3.10 和 Pinocchio 4.0，与 ROS 2 Humble 一致 |
 | isolated | 像最终用户一样隔离 `pip install` sdist，取允许范围内最新的 Pinocchio；崩溃时打印调用栈 |
-| source | 运行 README 的 C++ 步骤（由 `plan.py source-script` 提取），再跑 ctest 和 [tests/consumer](../../tests/consumer)。Coal 和 Pinocchio 的安装结果会缓存，缓存键取自它们的编译步骤，只有这些步骤改了才重新编译 |
+| source | 运行[源码编译](install.md#source)的步骤（由 `plan.py source-script` 提取），再跑 ctest 和 [tests/consumer](../../tests/consumer)。Coal 和 Pinocchio 的安装结果会缓存，缓存键取自它们的编译步骤，只有这些步骤改了才重新编译 |
 | ros | 在 `ros:humble` 镜像里同时用 ROS apt 和 pip 安装 Pinocchio 与 Coal：`colcon build` 和 `colcon test` 必须用 ROS 的版本，再基于 install 空间构建 [tests/consumer](../../tests/consumer)；在 source 了 ROS 的环境里 `pip install` 必须用 pip 的 wheel |
 | release | 仅在设置了 `tag` 时运行 |
 

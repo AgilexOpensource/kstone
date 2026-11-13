@@ -76,16 +76,20 @@ if(TARGET kstone_cli)
     set(cli ${KSTONE_SETARCH} ${CMAKE_SYSTEM_PROCESSOR} -R ${cli})
   endif()
   set(fixtures ${CMAKE_CURRENT_SOURCE_DIR}/fixtures)
+  # run prints its summary before checking the status; a pass regex alone would hide failed cycles.
+  set(run_failed "failed=[1-9]")
   add_test(NAME cli/run COMMAND ${cli} run ${fixtures}/arm_loopback.yaml --duration 1)
-  set_tests_properties(cli/run PROPERTIES PASS_REGULAR_EXPRESSION "cycles=100 ")
+  set_tests_properties(cli/run PROPERTIES PASS_REGULAR_EXPRESSION "cycles=100 " FAIL_REGULAR_EXPRESSION "${run_failed}")
   add_test(NAME cli/serve COMMAND ${cli} run ${fixtures}/arm_loopback.yaml --duration 0.2 --realtime --serve 127.0.0.1:0)
-  set_tests_properties(cli/serve PROPERTIES PASS_REGULAR_EXPRESSION "serving on 127.0.0.1:[1-9][0-9]* \\(no authentication\\).*cycles=20 ")
+  set_tests_properties(cli/serve PROPERTIES PASS_REGULAR_EXPRESSION "serving on 127.0.0.1:[1-9][0-9]* \\(no authentication\\).*cycles=20 "
+                       FAIL_REGULAR_EXPRESSION "${run_failed}")
   add_test(NAME cli/serve_public COMMAND ${cli} run ${fixtures}/arm_loopback.yaml --serve 0.0.0.0:0)
   set_tests_properties(cli/serve_public PROPERTIES WILL_FAIL TRUE ENVIRONMENT "KSTONE_TOKEN=")
   file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/token.txt "0123456789abcdef-cli\n")
   add_test(NAME cli/serve_token COMMAND ${cli} run ${fixtures}/arm_loopback.yaml --duration 0.1
            --serve 0.0.0.0:0 --token-file ${CMAKE_CURRENT_BINARY_DIR}/token.txt)
-  set_tests_properties(cli/serve_token PROPERTIES PASS_REGULAR_EXPRESSION "serving on 0.0.0.0:[1-9][0-9]* \\(token required\\)")
+  set_tests_properties(cli/serve_token PROPERTIES PASS_REGULAR_EXPRESSION "serving on 0.0.0.0:[1-9][0-9]* \\(token required\\)"
+                       FAIL_REGULAR_EXPRESSION "${run_failed}")
   add_test(NAME cli/serve_short_token COMMAND ${cli} run ${fixtures}/arm_loopback.yaml --serve 127.0.0.1:0)
   set_tests_properties(cli/serve_short_token PROPERTIES WILL_FAIL TRUE ENVIRONMENT "KSTONE_TOKEN=short")
   add_test(NAME cli/check COMMAND ${cli} check ${fixtures}/arm_loopback.yaml)
@@ -121,7 +125,8 @@ if(TARGET kstone_cli)
   # Also covers module urdf paths relative to the config file (cwd is the build tree).
   add_test(NAME cli/example_omni_dual_arm
            COMMAND ${cli} run ${PROJECT_SOURCE_DIR}/examples/omni_dual_arm/omni_dual_arm.yaml --duration 1)
-  set_tests_properties(cli/example_omni_dual_arm PROPERTIES PASS_REGULAR_EXPRESSION "15 modules, 50.0 Hz.*cycles=50 ")
+  set_tests_properties(cli/example_omni_dual_arm PROPERTIES PASS_REGULAR_EXPRESSION "15 modules, 50.0 Hz.*cycles=50 "
+                       FAIL_REGULAR_EXPRESSION "${run_failed}")
 endif()
 if(KSTONE_SANITIZE STREQUAL "" AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
   # Interposes glibc malloc; sanitizers own the allocator, so skip there.
