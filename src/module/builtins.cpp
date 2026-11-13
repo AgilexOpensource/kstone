@@ -217,6 +217,7 @@ Status FrameTargetModule::finish(HomeStatus status) {
 }
 
 Status FrameTargetModule::prepare(Cycle& cycle) {
+    if (cycle.rebase) has_target_ = false;
     if (home_.update(cycle))
         if (Status s = finish(home_.status()); !s) return s;
     // Held without a target (e.g. since start): the port follows the observed pose; a running idle task holds its own.
@@ -402,7 +403,8 @@ Status FrameTargetModule::observe(const Workspace& workspace, Eigen::Isometry3d&
 Status FrameTargetModule::reset(const Cycle& cycle) {
     Eigen::Isometry3d observed;
     if (Status s = observe(cycle.workspace, observed); !s) return s;
-    if (cycle.rebase || !has_target_) target_ = observed;
+    if (cycle.rebase) has_target_ = false;
+    if (!has_target_) target_ = observed;
     if (Status s = trajectory_->reset(observed); !s) return s;
     return task_->set_target(observed);
 }
@@ -718,6 +720,7 @@ bool JointTargetModule::arrived(const Eigen::VectorXd& goal) const {
 }
 
 Status JointTargetModule::prepare(Cycle& cycle) {
+    if (cycle.rebase) has_target_ = false;
     fresh_now_ = fresh_;
     fresh_ = false;
     now_ = cycle.now;
@@ -804,7 +807,8 @@ Status JointTargetModule::on_preempted(const Cycle&, const std::string&) {
 Status JointTargetModule::reset(const Cycle& cycle) {
     measure(cycle);
     // on_idle claim resumes idle from where the joints are.
-    if (cycle.rebase || !has_target_ || (config_.on_idle == OnIdle::claim && !claiming_))
+    if (cycle.rebase) has_target_ = false;
+    if (!has_target_ || (config_.on_idle == OnIdle::claim && !claiming_))
         target_ = measured_;
     else if (filling_)
         for (std::size_t i = 0; i < fill_.size(); ++i)
@@ -924,7 +928,7 @@ Status GazeModule::prepare(Cycle& cycle) {
         focus_.setConstant(std::numeric_limits<double>::quiet_NaN());
         active_count_ = 0;
     }
-    // Last cycle's solved poses: prepare() runs before the workspace is updated, also while held.
+    // Normally last-cycle FK; synchronization refreshes it before prepare(), including held modules.
     const Workspace& ws = cycle.workspace;
     Eigen::Isometry3d root = Eigen::Isometry3d::Identity();
     if (ws.updated() && free_root_)

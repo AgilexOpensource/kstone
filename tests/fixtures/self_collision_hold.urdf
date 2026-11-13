@@ -1,0 +1,17 @@
+<robot name="self_collision_hold">
+  <link name="base">
+    <collision><origin xyz="0.5 0 0"/><geometry><sphere radius="0.1"/></geometry></collision>
+  </link>
+  <link name="offset"/>
+  <link name="slider">
+    <collision><geometry><sphere radius="0.1"/></geometry></collision>
+  </link>
+  <joint name="offset_joint" type="prismatic">
+    <parent link="base"/><child link="offset"/><axis xyz="0 1 0"/>
+    <limit lower="-0.1" upper="0.1" velocity="1.0" effort="100"/>
+  </joint>
+  <joint name="slide" type="prismatic">
+    <parent link="offset"/><child link="slider"/><axis xyz="1 0 0"/>
+    <limit lower="-0.5" upper="0.6" velocity="2.0" effort="100"/>
+  </joint>
+</robot>

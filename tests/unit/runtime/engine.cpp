@@ -773,18 +773,36 @@ struct StampedFixture {
 };
 
 StampedFixture make_stamped(double feedback_timeout_s, std::vector<std::string> feedback_joints = {},
-                            bool stamped = true, std::vector<FeedbackGroup> groups = {}) {
+                            bool stamped = true, std::vector<FeedbackGroup> groups = {}, bool outside = false,
+                            bool frame = false, bool coupled = false) {
     auto model = Model::load(ModelSource::file((kFixtures / "arm.urdf").string()), {}, Context::defaults());
     REQUIRE(model);
     auto set = ModuleSet::create(*model);
     REQUIRE(set);
     JointTargetModuleConfig jc;
     jc.joints = {"j1", "j2", "j3"};
-    REQUIRE(set->add(std::make_shared<JointTargetModule>("arm", jc)));
+    if (frame) {
+        FrameTargetModuleConfig fc;
+        fc.frame = "tool";
+        fc.joints = jc.joints;
+        REQUIRE(set->add(std::make_shared<FrameTargetModule>("arm", fc)));
+    } else {
+        REQUIRE(set->add(std::make_shared<JointTargetModule>("arm", jc)));
+    }
+    if (coupled) {
+        jc.on_idle = OnIdle::claim;
+        REQUIRE(set->add(std::make_shared<JointTargetModule>("arm_idle", jc)));
+    }
     jc.joints = {"j4"};
     REQUIRE(set->add(std::make_shared<JointTargetModule>("wrist", jc)));
     auto clock = std::make_shared<ManualClock>(1'000'000'000);
-    auto robot = std::make_shared<StampedRobot>((*model)->neutral(), (*model)->nv());
+    Eigen::VectorXd initial = (*model)->neutral();
+    if (outside) {
+        initial[(*model)->joints()[*(*model)->joint_id("j1")].idx_q] = 2.05;
+        initial[(*model)->joints()[*(*model)->joint_id("j2")].idx_q] = -1.55;
+        initial[(*model)->joints()[*(*model)->joint_id("j4")].idx_q] = -0.02;
+    }
+    auto robot = std::make_shared<StampedRobot>(initial, (*model)->nv());
     robot->stamp_ns = stamped ? clock->now_ns() : -1;
     Context context = Context::defaults();
     context.clock = clock;
@@ -847,6 +865,132 @@ Eigen::Index iq(const Engine& e, const char* joint) {
     return m.joints()[*m.joint_id(joint)].idx_q;
 }
 }  // namespace
+
+namespace {
+Eigen::VectorXd clipped_feedback(const Engine& engine) {
+    const auto& model = *engine.modules().model();
+    Eigen::VectorXd q = engine.state().q;
+    for (const auto& joint : model.joints())
+        if (joint.nq == 1 && joint.nv == 1 && model.has_position_limit(joint.id))
+            q[joint.idx_q] = std::clamp(q[joint.idx_q], model.lower_position_limit()[joint.idx_q],
+                                        model.upper_position_limit()[joint.idx_q]);
+    return q;
+}
+void check_clipped_targets(const Engine& engine) {
+    const Eigen::VectorXd clipped = clipped_feedback(engine);
+    CHECK(engine.command().q.isApprox(clipped, 1e-12));
+    CHECK(engine.ideal().isApprox(clipped, 1e-12));
+    CHECK(engine.command().v.isZero(1e-12));
+    if (auto frame = std::dynamic_pointer_cast<FrameTargetModule>(engine.modules().module("arm"))) {
+        Workspace at(engine.modules().model());
+        REQUIRE(at.update(clipped));
+        Eigen::Isometry3d expected;
+        REQUIRE(at.frame_pose(frame->frame_id(), expected));
+        CHECK(frame->target().matrix().isApprox(expected.matrix(), 1e-12));
+        CHECK(frame->trajectory()->ramp_pose().matrix().isApprox(expected.matrix(), 1e-12));
+    } else {
+        auto arm = std::dynamic_pointer_cast<JointTargetModule>(engine.modules().module("arm"));
+        REQUIRE(arm);
+        CHECK(arm->target()[0] == doctest::Approx(clipped[iq(engine, "j1")]));
+        CHECK(arm->target()[1] == doctest::Approx(clipped[iq(engine, "j2")]));
+    }
+}
+}  // namespace
+
+TEST_CASE(
+    "engine: out-of-range startup clips commands and seeds joint/FK targets without altering feedback") {
+    for (const bool frame : {false, true}) {
+        CAPTURE(frame);
+        StampedFixture f = make_stamped(0.0, {}, true, {}, true, frame);
+        const Eigen::VectorXd raw = f.engine.state().q;
+        CHECK_FALSE(raw.isApprox(clipped_feedback(f.engine), 1e-12));
+        CHECK(f.engine.ideal().isApprox(clipped_feedback(f.engine), 1e-12));
+        REQUIRE(f.engine.step(0.01));
+        CHECK(f.engine.state().q.isApprox(raw, 1e-12));
+        check_clipped_targets(f.engine);
+        for (int k = 2; k <= 10; ++k) {
+            REQUIRE(f.engine.step(0.01 * k));
+            check_clipped_targets(f.engine);
+        }
+        CHECK(f.engine.stats().guard_rejects == 0);
+    }
+}
+
+TEST_CASE("engine: coupled idle claims cannot leave held FK targets stale across clipped synchronization") {
+    StampedFixture f = make_stamped(0.0, {}, true, {}, true, true, true);
+    REQUIRE(f.engine.step(0.01));
+    auto frame = std::dynamic_pointer_cast<FrameTargetModule>(f.engine.modules().module("arm"));
+    REQUIRE(frame);
+    CHECK_FALSE(frame->running());
+    Workspace at(f.engine.modules().model());
+    REQUIRE(at.update(clipped_feedback(f.engine)));
+    Eigen::Isometry3d expected;
+    REQUIRE(at.frame_pose(frame->frame_id(), expected));
+    CHECK(frame->target().matrix().isApprox(expected.matrix(), 1e-12));
+    auto goal = expected;
+    goal.translation().x() += 0.02;
+    REQUIRE(frame->set_target(goal));
+    auto idle = std::dynamic_pointer_cast<JointTargetModule>(f.engine.modules().module("arm_idle"));
+    REQUIRE(idle->set_target(idle->target()));
+    REQUIRE(f.engine.step(0.02));
+    CHECK_FALSE(frame->running());
+    CHECK(frame->has_target());
+    f.engine.modules().resynchronize(true);
+    REQUIRE(f.engine.step(0.03));
+    CHECK_FALSE(frame->running());
+    CHECK_FALSE(frame->has_target());
+    CHECK(frame->target().matrix().isApprox(expected.matrix(), 1e-12));
+}
+
+TEST_CASE("engine: reattach and pause resume clip feedback before joint/FK reset and drop detached targets") {
+    for (const bool frame : {false, true}) {
+        CAPTURE(frame);
+        StampedFixture f = make_stamped(0.05, {}, true, {}, true, frame);
+        double time = 0.0;
+        const auto step = [&](std::int64_t ns, bool fresh) {
+            f.clock->advance_ns(ns);
+            if (fresh) f.robot->stamp_ns = f.clock->now_ns();
+            time += 0.01;
+            REQUIRE(f.engine.step(time));
+        };
+        step(0, true);
+        check_clipped_targets(f.engine);
+        step(50'000'000, true);
+        REQUIRE(f.engine.attached());
+        auto arm = f.engine.modules().module("arm");
+        if (auto ft = std::dynamic_pointer_cast<FrameTargetModule>(arm)) {
+            auto goal = ft->target();
+            goal.translation().x() += 0.02;
+            REQUIRE(ft->set_target(goal));
+        } else {
+            REQUIRE(std::dynamic_pointer_cast<JointTargetModule>(arm)->set_target(
+                {"j1"}, Eigen::VectorXd::Constant(1, 1.0)));
+        }
+        step(10'000'000, true);
+        step(60'000'000, false);
+        CHECK_FALSE(f.engine.attached());
+        f.robot->offset = Eigen::VectorXd::Zero(f.engine.state().q.size());
+        f.robot->offset[iq(f.engine, "j1")] = 0.2;
+        f.robot->offset[iq(f.engine, "j2")] = -0.2;
+        f.robot->offset[iq(f.engine, "j4")] = -0.03;
+        step(0, true);
+        CHECK_FALSE(f.engine.state().q.isApprox(clipped_feedback(f.engine), 1e-12));
+        check_clipped_targets(f.engine);
+        f.robot->offset.setZero();
+        step(50'000'000, true);
+        REQUIRE(f.engine.attached());
+        check_clipped_targets(f.engine);
+        if (auto ft = std::dynamic_pointer_cast<FrameTargetModule>(arm)) CHECK_FALSE(ft->has_target());
+        f.engine.set_paused(true);
+        f.robot->offset[iq(f.engine, "j1")] = 0.2;
+        f.robot->offset[iq(f.engine, "j2")] = -0.2;
+        step(10'000'000, true);
+        f.engine.set_paused(false);
+        step(0, true);
+        CHECK_FALSE(f.engine.state().q.isApprox(clipped_feedback(f.engine), 1e-12));
+        check_clipped_targets(f.engine);
+    }
+}
 
 TEST_CASE("engine: stale feedback detaches, reattaching holds then syncs again after the timeout") {
     StampedFixture f = make_stamped(0.05);

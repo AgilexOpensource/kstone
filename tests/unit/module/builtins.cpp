@@ -810,6 +810,35 @@ TEST_CASE("world_collision module: stops a joint target at clearance until disab
     CHECK(jt->settled());
 }
 
+TEST_CASE("self_collision module: automatic recovery needs no fresh target after synchronization") {
+    ModelPtr m = load("self_collision_hold.urdf");
+    auto geometry = CollisionModel::from_urdf(
+        m, ModelSource::file((kFixtures / "self_collision_hold.urdf").string()), {}, Context::defaults());
+    REQUIRE(geometry);
+    ModuleSet set = make_set(m);
+    SelfCollisionModuleConfig sc;
+    sc.model = *geometry;
+    sc.closed_loop = true;
+    auto col = std::make_shared<SelfCollisionModule>("collision", sc);
+    JointTargetModuleConfig jc;
+    jc.joints = {"slide"};
+    auto jt = std::make_shared<JointTargetModule>("slide", jc);
+    REQUIRE(set.add(col));
+    REQUIRE(set.add(jt));
+    REQUIRE(set.configure());
+    Eigen::VectorXd q = m->neutral(), v = Eigen::VectorXd::Zero(m->nv());
+    REQUIRE(m->set_joint_position(q, *m->joint_id("slide"), 0.28));
+    SolveResult out;
+    for (int k = 1; k <= 2; ++k) {
+        set.resynchronize(true);
+        REQUIRE(set.step(q, v, &q, 0.01 * k, 0.01, out));
+        CHECK(jt->target()[0] == doctest::Approx(q[1]));
+        CHECK(out.q_next[1] < q[1]);
+        CHECK(out.q_next[0] == doctest::Approx(q[0]));
+        CHECK(col->constraint()->closed_loop());
+    }
+}
+
 TEST_CASE("world_collision module: closed_loop evaluates the distance at the measured configuration") {
     ModelPtr m = load("slider_collision.urdf");
     CollisionModelOptions co;
@@ -2144,6 +2173,46 @@ TEST_CASE("center_of_mass module: only the recovery tasks' joints may pull the C
     ModuleSet bad = make_set(m);
     REQUIRE(bad.add(std::make_shared<CenterOfMassModule>("com", cc)));
     CHECK_FALSE(bad.configure());
+}
+
+TEST_CASE("center_of_mass module: outside support recovers without a fresh target after synchronization") {
+    ModelPtr m = load("arm.urdf");
+    const Eigen::VectorXd measured = arm_pose(m, 0.3);
+    Workspace ws(m);
+    REQUIRE(ws.update(measured));
+    Eigen::Vector3d center;
+    REQUIRE(ws.center_of_mass(center));
+    ModuleSet set = make_set(m);
+    FrameTargetModuleConfig fc;
+    fc.frame = "tool";
+    fc.joints = {"j1", "j2"};
+    fc.trajectory = pose_limits();
+    auto ft = std::make_shared<FrameTargetModule>("tool", fc);
+    CenterOfMassModuleConfig cc;
+    cc.frame = "base_link";
+    const double edge = center.x() - 0.005;
+    cc.polygon = {{-1, -1}, {edge, -1}, {edge, 1}, {-1, 1}};
+    cc.closed_loop = true;
+    cc.recovery_tasks = {ft};
+    auto com = std::make_shared<CenterOfMassModule>("com", cc);
+    REQUIRE(set.add(com));
+    REQUIRE(set.add(ft));
+    REQUIRE(set.configure());
+    Loop loop{m, set, measured};
+    loop.step();
+    CHECK_FALSE(ft->has_target());
+    CHECK_FALSE(loop.q.isApprox(measured, 1e-10));
+    const Index rows = com->constraint()->rows();
+    Eigen::MatrixXd A = Eigen::MatrixXd::Zero(rows, m->nv());
+    Eigen::VectorXd lo = Eigen::VectorXd::Constant(rows, -INFINITY);
+    Eigen::VectorXd hi = Eigen::VectorXd::Constant(rows, INFINITY);
+    REQUIRE(com->constraint()->evaluate(Tick{ws, 0.01}, A, lo, hi));
+    CHECK(hi.minCoeff() < 0.0);
+    set.resynchronize(true);
+    loop.q = measured;
+    loop.step();
+    CHECK_FALSE(ft->has_target());
+    CHECK_FALSE(loop.q.isApprox(measured, 1e-10));
 }
 
 TEST_CASE("center_of_mass module: display outputs") {

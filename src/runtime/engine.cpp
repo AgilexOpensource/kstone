@@ -545,7 +545,7 @@ struct Engine::Impl {
         for (const Mimic& m : mimics) q[m.follower_q] = m.multiplier * q[m.leader_q] + m.offset;
     }
 
-    /// Commanded state <- measured, projected onto the model (mimics derived, scalar limits clamped).
+    /// Commanded state <- clipped measurement; module FK resets from this state, not raw feedback.
     void sync_all() {
         ideal_q = state.q;
         derive_mimics(ideal_q);

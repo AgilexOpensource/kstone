@@ -569,6 +569,9 @@ Status ModuleSet::step(const Eigen::Ref<const Eigen::VectorXd>& q, const Eigen::
             e.rebase_writes = writes;
         }
     }
+    // Synchronization prepares held modules from current projected FK, not the previous cycle.
+    if (s.resync || s.resync_dofs.any())
+        if (Status st = s.workspace.update(s.q); !st) return st;
     s.resync = false;
     s.rebase = false;
     s.resync_dofs.set_range(0, s.resync_dofs.size(), false);
