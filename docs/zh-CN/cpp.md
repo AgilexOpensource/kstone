@@ -33,9 +33,9 @@ ctest --test-dir build
 | 选项 | 默认 | 作用 |
 |---|---|---|
 | `KSTONE_PINOCCHIO_SOURCE` | `AUTO` | Pinocchio 和 Coal 的来源，见[安装](install.md#choosing-the-dependency-source) |
-| `KSTONE_BUILD_TESTS` | 作为顶层项目时 `ON` | 单元测试 |
-| `KSTONE_BUILD_TOOLS` | 作为顶层项目时 `ON` | `kstone` 命令行工具 |
-| `KSTONE_BUILD_EXAMPLES` | 作为顶层项目时 `ON` | [examples](../../examples) 中的示例 |
+| `KSTONE_BUILD_TESTS` | 作为顶层项目时 `ON`，colcon 下 `OFF` | 单元测试 |
+| `KSTONE_BUILD_TOOLS` | 作为顶层项目时 `ON`，colcon 下 `OFF` | `kstone` 命令行工具 |
+| `KSTONE_BUILD_EXAMPLES` | 作为顶层项目时 `ON`，colcon 下 `OFF` | [examples](../../examples) 中的示例 |
 | `KSTONE_BUILD_BENCH` | `OFF` | 基准测试，见[开发](development.md#benchmarks) |
 | `KSTONE_BUILD_PYTHON` | `OFF` | Python 扩展，需要 pybind11 |
 | `BUILD_SHARED_LIBS` | `OFF` | 把 `libkstone` 编成共享库 |

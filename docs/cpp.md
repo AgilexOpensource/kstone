@@ -32,9 +32,9 @@ If the clone has no submodules, run `git submodule update --init --recursive`.
 | Option | Default | Effect |
 |---|---|---|
 | `KSTONE_PINOCCHIO_SOURCE` | `AUTO` | Where to find Pinocchio and Coal, see [Installation](install.md#choosing-the-dependency-source) |
-| `KSTONE_BUILD_TESTS` | `ON` as top-level project | Unit tests |
-| `KSTONE_BUILD_TOOLS` | `ON` as top-level project | The `kstone` CLI |
-| `KSTONE_BUILD_EXAMPLES` | `ON` as top-level project | The examples in [examples](../examples) |
+| `KSTONE_BUILD_TESTS` | `ON` as top-level project, `OFF` under colcon | Unit tests |
+| `KSTONE_BUILD_TOOLS` | `ON` as top-level project, `OFF` under colcon | The `kstone` CLI |
+| `KSTONE_BUILD_EXAMPLES` | `ON` as top-level project, `OFF` under colcon | The examples in [examples](../examples) |
 | `KSTONE_BUILD_BENCH` | `OFF` | Benchmarks, see [Development](development.md#benchmarks) |
 | `KSTONE_BUILD_PYTHON` | `OFF` | Python extension, needs pybind11 |
 | `BUILD_SHARED_LIBS` | `OFF` | Build `libkstone` as a shared library |

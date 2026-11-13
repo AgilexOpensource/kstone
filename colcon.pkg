@@ -1,0 +1,3 @@
+{
+  "cmake-args": ["-DKSTONE_EXTRAS_DEFAULT=OFF"]
+}

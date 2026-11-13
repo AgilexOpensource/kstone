@@ -6,9 +6,13 @@ if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
 endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-option(KSTONE_BUILD_TESTS "Build kstone tests" ${PROJECT_IS_TOP_LEVEL})
-option(KSTONE_BUILD_TOOLS "Build the kstone command-line tool" ${PROJECT_IS_TOP_LEVEL})
-option(KSTONE_BUILD_EXAMPLES "Build the C++ usage examples" ${PROJECT_IS_TOP_LEVEL})
+# colcon.pkg sets this to OFF so a plain colcon build skips tests, tools and examples.
+if(NOT DEFINED KSTONE_EXTRAS_DEFAULT)
+  set(KSTONE_EXTRAS_DEFAULT ${PROJECT_IS_TOP_LEVEL})
+endif()
+option(KSTONE_BUILD_TESTS "Build kstone tests" ${KSTONE_EXTRAS_DEFAULT})
+option(KSTONE_BUILD_TOOLS "Build the kstone command-line tool" ${KSTONE_EXTRAS_DEFAULT})
+option(KSTONE_BUILD_EXAMPLES "Build the C++ usage examples" ${KSTONE_EXTRAS_DEFAULT})
 option(KSTONE_BUILD_BENCH "Build kstone benchmarks (not part of ctest)" OFF)
 option(KSTONE_BUILD_PYTHON "Build the kstone Python extension (needs pybind11)" OFF)
 

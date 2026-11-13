@@ -293,7 +293,8 @@ jobs:
         run: |
           source "/opt/ros/$ROS_DISTRO/setup.bash"
           source "$RUNNER_TEMP/venv/bin/activate"
-          colcon build --event-handlers console_direct+ --cmake-args -DCMAKE_BUILD_TYPE=Release
+          colcon build --event-handlers console_direct+ --cmake-args \
+            -DKSTONE_BUILD_TESTS=ON -DKSTONE_BUILD_TOOLS=ON -DKSTONE_BUILD_EXAMPLES=ON
           colcon test --event-handlers console_direct+
           colcon test-result --verbose
       - name: Check that colcon used the ROS Pinocchio and Coal

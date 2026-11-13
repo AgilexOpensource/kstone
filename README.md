@@ -34,7 +34,7 @@ git clone --recursive https://github.com/AgilexOpensource/kstone.git
 cd ~/kstone_ws
 source /opt/ros/humble/setup.bash
 rosdep install --from-paths src --ignore-src -y
-colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
+colcon build
 source install/setup.bash
 ```
 
