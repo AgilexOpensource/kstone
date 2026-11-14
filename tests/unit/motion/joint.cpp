@@ -35,6 +35,27 @@ void follow(JointTrajectory& trajectory, Eigen::VectorXd& position, const Eigen:
 
 }  // namespace
 
+TEST_CASE("joint trajectory: checkpoint rolls back seed and running state across rate changes") {
+    JointTrajectory trajectory = make(1, {});
+    const auto raw = vec({2.05}), target = vec({2.0}), zero = vec({0.0}), limit = vec({1.5});
+    for (int k = 0; k < 60; ++k) {
+        const double dt = k < 20 ? 0.01 : 0.02;
+        trajectory.checkpoint();
+        REQUIRE(trajectory.step(raw, target, zero, limit, dt));
+        const auto q = trajectory.reference().eval();
+        const auto v = trajectory.velocity().eval();
+        const auto a = trajectory.acceleration().eval();
+        trajectory.rollback();
+        REQUIRE(trajectory.step(raw, target, zero, limit, dt));
+        CHECK(trajectory.reference() == q);
+        CHECK(trajectory.velocity() == v);
+        CHECK(trajectory.acceleration() == a);
+    }
+    CHECK(trajectory.reference()[0] == doctest::Approx(2.0));
+    CHECK(trajectory.velocity().isZero(1e-10));
+    CHECK(trajectory.acceleration().isZero(1e-10));
+}
+
 TEST_CASE("joint trajectory: direct passes the target through") {
     JointTrajectoryConfig config;
     config.trigger = JointTrigger::direct;

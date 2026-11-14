@@ -1,5 +1,7 @@
 #include "kstone/runtime/engine.hpp"
 
+#include "kstone/motion/joint_trajectory.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
@@ -398,8 +400,15 @@ struct Engine::Impl {
         bool refresh{false};       ///< estimate(): tracking error recomputed this cycle.
         std::int64_t fresh_since_ns{-1};  ///< Clock time the group turned fresh while detached; -1 = stale.
         std::int64_t err_stamp_ns{-1};
+        Mask transition_mask;  ///< Only independently corrected scalar DOFs and their mimic followers.
+        std::unique_ptr<JointTrajectory> transition;
+        std::vector<std::pair<Index, Index>> transition_joints;  ///< Independent scalar (q,v).
+        Eigen::VectorXd seed, target, zero_v, limits;
+        bool first_command{false};
+        bool transition_window{false};  ///< Do not restart a correction in the fresh attach window.
     };
     std::vector<Group> groups;
+    Mask synchronization_mask;
     std::vector<std::size_t> joint_group;  ///< Per JointId.
     std::vector<std::size_t> dof_group;    ///< Per dof.
     bool has_default{false};  ///< The last group is "default" (falls back to RobotState::stamp_ns).
@@ -419,7 +428,7 @@ struct Engine::Impl {
     bool written{false};
 
     struct Mimic {
-        Index follower_q, leader_q;
+        Index follower_q, leader_q, follower_v, leader_v;
         double multiplier, offset;
     };
     std::vector<Mimic> mimics;
@@ -470,7 +479,7 @@ struct Engine::Impl {
             const JointInfo& fj = model.joints()[*f];
             const JointInfo& lj = model.joints()[*l];
             if (fj.nq == 1 && fj.nv == 1 && lj.nq == 1 && lj.nv == 1)
-                mimics.push_back({fj.idx_q, lj.idx_q, rel.multiplier, rel.offset});
+                mimics.push_back({fj.idx_q, lj.idx_q, fj.idx_v, lj.idx_v, rel.multiplier, rel.offset});
         }
         feedback.assign(static_cast<std::size_t>(model.nv()), false);
         auto scalar = [&](const JointInfo& j) { return j.id != 0 && j.nv == 1 && !follower[j.id]; };
@@ -507,9 +516,11 @@ struct Engine::Impl {
         if (!layout) return std::move(layout).error();
         const std::size_t n = layout->names.size();
         groups.resize(n);
+        synchronization_mask = Mask(static_cast<std::size_t>(model.nv()));
         for (std::size_t g = 0; g < n; ++g) {
             groups[g].name = layout->names[g];
             groups[g].mask = Mask(static_cast<std::size_t>(model.nv()));
+            groups[g].transition_mask = Mask(static_cast<std::size_t>(model.nv()));
         }
         has_default = n > options.feedback_groups.size();
         joint_group = std::move(layout->joint_group);
@@ -545,32 +556,89 @@ struct Engine::Impl {
         for (const Mimic& m : mimics) q[m.follower_q] = m.multiplier * q[m.leader_q] + m.offset;
     }
 
-    /// Commanded state <- clipped measurement; module FK resets from this state, not raw feedback.
-    void sync_all() {
+    void derive_mimic_velocities(Eigen::VectorXd& v) const {
+        for (const Mimic& m : mimics) v[m.follower_v] = m.multiplier * v[m.leader_v];
+    }
+
+    Status start_transition(std::size_t g) {
+        Group& grp = groups[g];
+        grp.transition.reset();
+        grp.first_command = false;
+        grp.transition_window = false;
+        grp.transition_joints.clear();
+        grp.transition_mask.set_range(0, grp.transition_mask.size(), false);
+        for (const auto& p : position_limits) {
+            const bool follower = std::any_of(mimics.begin(), mimics.end(),
+                                              [&](const Mimic& m) { return m.follower_q == p.iq; });
+            if (joint_group[p.joint] != g || follower ||
+                (ideal_q[p.iq] >= p.lower && ideal_q[p.iq] <= p.upper))
+                continue;
+            grp.transition_joints.emplace_back(p.iq, p.iv);
+            grp.transition_mask.set(static_cast<std::size_t>(p.iv));
+        }
+        if (grp.transition_joints.empty()) return {};
+        for (const Mimic& m : mimics)
+            if (grp.transition_mask.test(static_cast<std::size_t>(m.leader_v)))
+                grp.transition_mask.set(static_cast<std::size_t>(m.follower_v));
+        const Index n = static_cast<Index>(grp.transition_joints.size());
+        grp.seed.resize(n);
+        grp.target.resize(n);
+        grp.limits.resize(n);
+        grp.zero_v = Eigen::VectorXd::Zero(n);
+        const auto& model = *modules.model();
+        for (Index k = 0; k < n; ++k) {
+            const auto [iq, iv] = grp.transition_joints[static_cast<std::size_t>(k)];
+            grp.seed[k] = ideal_q[iq];
+            grp.target[k] =
+                std::clamp(ideal_q[iq], model.lower_position_limit()[iq], model.upper_position_limit()[iq]);
+            grp.limits[k] = max_v[iv];
+            // Mimic followers must obey their own velocity limits too.
+            for (const Mimic& m : mimics)
+                if (m.leader_q == iq && m.multiplier != 0.0) {
+                    grp.limits[k] = std::min(grp.limits[k], max_v[m.follower_v] / std::abs(m.multiplier));
+                }
+            if (!std::isfinite(grp.limits[k]) || grp.limits[k] <= 0.0)
+                return make_error(
+                    ErrorCode::invalid_argument,
+                    "engine synchronization: finite positive velocity limit required for " + dof_name(iv));
+        }
+        auto trajectory = JointTrajectory::create(n);
+        if (!trajectory) return std::move(trajectory).error();
+        grp.transition = std::make_unique<JointTrajectory>(std::move(*trajectory));
+        grp.first_command = true;
+        grp.transition_window = true;
+        return {};
+    }
+
+    /// Keep raw synchronization positions; any scalar correction is a separate constrained transition.
+    Status sync_all() {
         ideal_q = state.q;
         derive_mimics(ideal_q);
-        for (const auto& p : position_limits) ideal_q[p.iq] = std::clamp(ideal_q[p.iq], p.lower, p.upper);
         ideal_v.setZero();
         err.setZero();
-        for (Group& g : groups) g.err_stamp_ns = -1;
+        for (std::size_t i = 0; i < groups.size(); ++i) {
+            groups[i].err_stamp_ns = -1;
+            if (auto s = start_transition(i); !s) return s;
+        }
         modules.resynchronize(false);
+        return {};
     }
 
     /// Same for group g's joints only; resynchronizes the modules driving them (rebase: dropping held targets).
-    void sync_group(std::size_t g, bool counted, bool rebase) {
+    Status sync_group(std::size_t g, bool counted, bool rebase) {
         Group& grp = groups[g];
         for (const auto& [start, size] : grp.q_segments)
             ideal_q.segment(start, size) = state.q.segment(start, size);
         derive_mimics(ideal_q);
-        for (const auto& p : position_limits)
-            if (joint_group[p.joint] == g) ideal_q[p.iq] = std::clamp(ideal_q[p.iq], p.lower, p.upper);
         for (const Index i : grp.dofs) ideal_v[i] = err[i] = 0.0;
         grp.err_stamp_ns = -1;
+        if (auto s = start_transition(g); !s) return s;
         if (groups.size() == 1)
             modules.resynchronize(rebase);
         else
             modules.resynchronize(rebase, grp.mask);
         if (counted) stats.resyncs++;
+        return {};
     }
 
     /// Held tracking error of the attached groups -> measured estimate.
@@ -664,6 +732,12 @@ struct Engine::Impl {
             command.q[p.iq] = qc;
             clamped = true;
         }
+        if (!command.q.allFinite() || !command.v.allFinite())
+            return reject(ErrorCode::invalid_argument, "guarded command is not finite");
+        for (Index i = 0; i < model.nv(); ++i)
+            if (std::abs(command.v[i]) > max_v[i] + tol)
+                return reject(ErrorCode::out_of_range,
+                              "position correction exceeds velocity limit for " + dof_name(i));
         if (clamped) stats.guard_clamps++;
         return {};
     }
@@ -747,7 +821,7 @@ Result<Engine> Engine::create(ModuleSet modules, std::shared_ptr<RobotInterface>
     if (auto s = impl->init_feedback(); !s) return std::move(s).error();
     impl->ideal_v = Eigen::VectorXd::Zero(impl->state.v.size());
     impl->measured_q = impl->state.q;
-    impl->sync_all();
+    if (auto s = impl->sync_all(); !s) return std::move(s).error();
     const std::int64_t created_ns = impl->context.clock->now_ns();
     impl->attached = true;
     for (std::size_t i = 0; i < impl->groups.size(); ++i) {
@@ -807,6 +881,8 @@ Status Engine::step_impl(double now) {
             d.attached = false;
             g.fresh_since_ns = -1;
             g.hold_pending = true;
+            g.transition.reset();
+            g.transition_window = false;
         } else if (!g.attached && g.fresh_since_ns < 0) {
             g.fresh_since_ns = start;
         }
@@ -824,16 +900,19 @@ Status Engine::step_impl(double now) {
             if (g.fresh && !g.attached) {
                 // Track the robot through the window; counted once per detach. Targets set before the robot
                 // state was known are dropped.
-                d.sync_group(i, g.hold_pending, g.hold_pending);
+                // Unattached writes are suppressed by feedback-aware adapters. Keep tracking raw feedback
+                // throughout settling, including the attachment boundary; do not consume startup motion.
+                if (auto s = d.sync_group(i, g.hold_pending || resume, g.hold_pending); !s) return s;
                 g.hold_pending = false;
                 // Feedback must stay fresh for a whole timeout window before the commanded state is trusted.
                 if (start - g.fresh_since_ns >= d.timeout_ns) {
                     g.attached = true;
                     g.fresh_since_ns = -1;
                     d.stats.attaches++;
+                    g.transition_window = false;
                 }
             } else if (g.attached && resume) {
-                d.sync_group(i, true, false);
+                if (auto s = d.sync_group(i, true, false); !s) return s;
             }
         }
         d.attached = true;
@@ -843,8 +922,19 @@ Status Engine::step_impl(double now) {
         }
         if (d.has_measured)
             if (auto s = d.estimate(); !s) return s;
-        // Modules have advanced from here on; a failure re-seeds them from the last written command.
+        d.synchronization_mask.set_range(0, d.synchronization_mask.size(), false);
+        for (Impl::Group& g : d.groups)
+            if (g.transition) {
+                d.synchronization_mask |= g.transition_mask;
+                g.transition->checkpoint();
+            }
+        if (auto s = d.modules.set_synchronization_hold(d.synchronization_mask); !s) return s;
+        // Profile state is speculative until the driver accepts the command.
         const auto fail = [&d](Status s) {
+            for (Impl::Group& g : d.groups)
+                if (g.transition) g.transition->rollback();
+            d.command.q = d.ideal_q;
+            d.command.v = d.ideal_v;
             d.modules.resynchronize(false);
             return s;
         };
@@ -855,12 +945,49 @@ Status Engine::step_impl(double now) {
         const Mask& aligned = d.modules.aligned();
         for (Index i = 0; i < d.err.size(); ++i)
             if (aligned.test(static_cast<std::size_t>(i))) d.err[i] = 0.0;
+        for (Impl::Group& g : d.groups) {
+            if (!g.transition) continue;
+            if (g.first_command) {
+                // The first synchronization command is raw for the entire feedback group.
+                for (const auto& [start_q, size] : g.q_segments)
+                    d.result.q_next.segment(start_q, size) = d.ideal_q.segment(start_q, size);
+                for (Index i : g.dofs) d.result.v[i] = 0.0;
+            } else {
+                if (auto s = g.transition->step(g.seed, g.target, g.zero_v, g.limits, d.dt); !s)
+                    return fail(std::move(s));
+                for (Index k = 0; k < g.seed.size(); ++k) {
+                    const auto [iq, iv] = g.transition_joints[static_cast<std::size_t>(k)];
+                    d.result.q_next[iq] = g.transition->reference()[k];
+                    d.result.v[iv] = g.transition->velocity()[k];
+                }
+            }
+        }
+        if (d.synchronization_mask.any()) {
+            d.derive_mimics(d.result.q_next);
+            d.derive_mimic_velocities(d.result.v);
+        }
         if (d.options.safety.mode == GuardMode::off) {
+            if (!d.result.q_next.allFinite() || !d.result.v.allFinite())
+                return fail(make_error(ErrorCode::invalid_argument, "engine: command is not finite"));
             d.command.q = d.result.q_next;
             d.command.v = d.result.v;
         } else if (auto s = d.guard(d.result); !s) {
             return fail(std::move(s));
         }
+        for (const Impl::Group& g : d.groups)
+            if (g.transition)
+                for (Index i : g.dofs)
+                    if ((g.first_command || g.transition_mask.test(static_cast<std::size_t>(i))) &&
+                        d.command.v[i] != d.result.v[i])
+                        return fail(d.reject(ErrorCode::out_of_range,
+                                             "synchronization profile cannot be velocity-clamped"));
+        for (const Impl::Group& g : d.groups)
+            if (g.transition)
+                for (const auto& p : d.position_limits)
+                    if (g.transition_mask.test(static_cast<std::size_t>(p.iv)) &&
+                        d.command.q[p.iq] != d.result.q_next[p.iq])
+                        return fail(d.reject(ErrorCode::out_of_range,
+                                             "synchronization profile cannot be position-clamped"));
         d.command.fresh = d.attached;
         for (std::size_t i = 0; i < d.groups.size(); ++i) d.command.group_attached[i] = d.groups[i].attached;
         if (auto s = d.robot->write(d.command); !s) return fail(std::move(s));
@@ -868,6 +995,17 @@ Status Engine::step_impl(double now) {
         if (!d.fresh) d.stats.stale_cycles++;
         d.ideal_q = d.command.q;
         d.ideal_v = d.command.v;
+        for (Impl::Group& g : d.groups) {
+            // A successful internal write is not delivery for an unattached feedback group.
+            if (!g.transition || !g.attached) continue;
+            if (g.first_command) {
+                g.first_command = false;
+            } else if ((g.transition->reference() - g.target).norm() <= 1e-12 &&
+                       g.transition->velocity().isZero(1e-10) && g.transition->acceleration().isZero(1e-10)) {
+                g.transition.reset();
+                d.modules.resynchronize(true, g.transition_mask);
+            }
+        }
     }
     d.stats.cycles++;
     d.stats.time = now;

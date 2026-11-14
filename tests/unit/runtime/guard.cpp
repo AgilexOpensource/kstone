@@ -110,7 +110,7 @@ struct Fixture {
 // arm.urdf: j1 is revolute in [-2, 2] with a velocity limit of 1.5 rad/s.
 // solver_velocity > 0 lets the solver exceed the model velocity limit so the guard sees it.
 Fixture make(CommandGuardOptions guard, double solver_velocity = 0.0, double j1 = 0.0,
-             const Context& context = Context::defaults()) {
+             const Context& context = Context::defaults(), bool grouped = false) {
     auto model = Model::load(ModelSource::file((kFixtures / "arm.urdf").string()), {}, Context::defaults());
     REQUIRE_MESSAGE(model, message(model));
     SolverOptions so;
@@ -126,6 +126,8 @@ Fixture make(CommandGuardOptions guard, double solver_velocity = 0.0, double j1 
     options.rate_hz = 1.0 / kDt;
     options.safety = guard;
     options.feedback_timeout_s = 0.0;  // steps use virtual time; attach timing would follow the wall clock
+    if (grouped)
+        options.feedback_groups = {{"recovery", {"j1"}}, {"other", {"j2", "j3", "j4", "finger_left_joint"}}};
     auto e = Engine::create(std::move(*set), robot, options, context);
     REQUIRE_MESSAGE(e, message(e));
     return {*model, probe, robot, std::move(*e)};
@@ -215,8 +217,34 @@ TEST_CASE("guard: a joint measured outside its range may move back") {
     Fixture f = make({}, 0.0, 2.05);
     f.target_j1(0.0);
     REQUIRE(f.engine.step(kDt));
+    CHECK(f.robot->last.q[f.iq("j1")] == doctest::Approx(2.05));
+    REQUIRE(f.engine.step(2 * kDt));
     CHECK(f.robot->last.q[f.iq("j1")] < 2.05);
+    CHECK(2.05 - f.robot->last.q[f.iq("j1")] <= 1.5 * kDt);
     CHECK(f.engine.stats().guard_rejects == 0);
+}
+
+TEST_CASE("guard: rejected independent-group command cannot advance synchronization trajectory") {
+    auto f = make({}, 0.0, 2.05, Context::defaults(), true);
+    auto reference = make({}, 0.0, 2.05, Context::defaults(), true);
+    REQUIRE(f.engine.step(kDt));
+    REQUIRE(reference.engine.step(kDt));
+    const auto before = f.engine.ideal().eval();
+    f.probe->write_index = f.iq("j2");
+    f.probe->write_value = 2.0;
+    CHECK_FALSE(f.engine.step(2 * kDt));
+    CHECK(f.engine.stats().guard_rejects == 1);
+    CHECK(f.robot->writes == 1);
+    CHECK(f.engine.ideal() == before);
+    f.probe->write_index = -1;
+    for (int k = 2; k <= 80; ++k) {
+        REQUIRE(f.engine.step(k * kDt));
+        REQUIRE(reference.engine.step(k * kDt));
+        CHECK(f.engine.command().q[f.iq("j1")] ==
+              doctest::Approx(reference.engine.command().q[reference.iq("j1")]).epsilon(1e-12));
+        CHECK(f.engine.command().v[f.iv("j1")] ==
+              doctest::Approx(reference.engine.command().v[reference.iv("j1")]).epsilon(1e-12));
+    }
 }
 
 TEST_CASE("guard: values within the tolerance pass") {

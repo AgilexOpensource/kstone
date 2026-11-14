@@ -52,6 +52,10 @@ class KSTONE_EXPORT JointTrajectory {
     const JointTrajectoryConfig& config() const noexcept;
     /// Drop the profile; the next shaped step starts from the measured state.
     void reset() noexcept;
+    /// Save/restore the profile state around a speculative step (e.g. a command not yet written).
+    /// One checkpoint at a time; control-thread only, no allocation after create().
+    void checkpoint() noexcept;
+    void rollback() noexcept;
 
     /// Advance one cycle. `measured` and `measured_velocity` seed a new profile; `velocity_limit` must be finite
     /// and > 0 per joint (a change restarts the profile). internal on a Ruckig failure.

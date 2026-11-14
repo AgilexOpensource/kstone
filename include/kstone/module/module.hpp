@@ -375,6 +375,10 @@ class KSTONE_EXPORT ModuleSet {
                 double now, double dt, SolveResult& out);
     Status step(const Eigen::Ref<const Eigen::VectorXd>& q, const Eigen::Ref<const Eigen::VectorXd>& v,
                 const Eigen::VectorXd* measured, double now, double dt, SolveResult& out);
+    /// Engine-owned synchronization hold. Affected modules keep their constraints, but do not prepare,
+    /// claim or contribute; targets are rebased from q even while held. An all-zero mask releases the hold.
+    /// Control-thread only; returns invalid_argument unless size is nv. Does not change enabled flags.
+    Status set_synchronization_hold(const Mask& dofs);
     /// The next step() skips one Cycle::index (running homings abort) and calls reset() on every running
     /// module, as after being held. rebase: modules also drop their held targets (Cycle::rebase).
     void resynchronize(bool rebase = false) noexcept;

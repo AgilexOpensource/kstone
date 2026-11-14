@@ -290,7 +290,8 @@ struct ModuleSet::Impl {
     std::uint64_t cycle{0};
     bool resync{false};
     bool rebase{false};
-    Mask resync_dofs, rebase_dofs;
+    Mask resync_dofs, rebase_dofs, synchronization_hold;
+    const std::string synchronization_holder{"synchronization"};
     bool configured{false};
     bool attempted{false};
 
@@ -357,6 +358,7 @@ Result<ModuleSet> ModuleSet::create(ModelPtr model, SolverOptions options, const
     impl->granted = Mask(nv);
     impl->aligned = Mask(nv);
     impl->resync_dofs = Mask(nv);
+    impl->synchronization_hold = Mask(nv);
     impl->rebase_dofs = Mask(nv);
     impl->q.setZero(model->nq());
     impl->v.setZero(model->nv());
@@ -477,7 +479,10 @@ Status ModuleSet::Impl::arbitrate() {
         Module& m = *e.module;
         m.held_by_ = nullptr;
         m.locked_by_ = nullptr;
-        const bool claiming = m.enabled_ && e.claim.joints && e.claim.joints->any();
+        const bool synchronizing =
+            intersects(e.driven, synchronization_hold) || intersects(e.locked, synchronization_hold);
+        if (synchronizing) m.held_by_ = &synchronization_holder;
+        const bool claiming = m.enabled_ && !synchronizing && e.claim.joints && e.claim.joints->any();
         if (claiming && !e.claimed) e.claim_since = cycle;
         e.claimed = claiming;
         if (claiming) {
@@ -516,7 +521,8 @@ Status ModuleSet::Impl::arbitrate() {
     }
     for (std::size_t i = 0; i < entries.size(); ++i) {
         Entry& e = entries[i];
-        if (e.claimed || !e.module->enabled_ || !intersects(e.driven, granted)) continue;
+        if (e.claimed || e.module->held_by_ || !e.module->enabled_ || !intersects(e.driven, granted))
+            continue;
         for (std::size_t j : claimants)
             if (entries[j].module->held_by_ == nullptr && intersects(e.driven, *entries[j].claim.joints)) {
                 e.module->held_by_ = &entries[j].module->id();
@@ -569,8 +575,8 @@ Status ModuleSet::step(const Eigen::Ref<const Eigen::VectorXd>& q, const Eigen::
             e.rebase_writes = writes;
         }
     }
-    // Synchronization prepares held modules from current projected FK, not the previous cycle.
-    if (s.resync || s.resync_dofs.any())
+    // Synchronization rebases held modules from current commanded FK, including raw startup positions.
+    if (s.resync || s.resync_dofs.any() || s.synchronization_hold.any())
         if (Status st = s.workspace.update(s.q); !st) return st;
     s.resync = false;
     s.rebase = false;
@@ -606,6 +612,14 @@ Status ModuleSet::step(const Eigen::Ref<const Eigen::VectorXd>& q, const Eigen::
         }
         e.claim = {};
         if (!m.enabled_) continue;
+        if (intersects(e.driven, s.synchronization_hold) || intersects(e.locked, s.synchronization_hold)) {
+            cycle.rebase = cycle.resynced = true;
+            if (m.held_by_ != &s.synchronization_holder)
+                if (Status st = m.on_preempted(cycle, s.synchronization_holder); !st)
+                    return with_context(st.error(), "module '" + m.id() + "'");
+            if (Status st = m.reset(cycle); !st) return with_context(st.error(), "module '" + m.id() + "'");
+            continue;
+        }
         if (Status st = m.prepare(cycle); !st) return with_context(st.error(), "module '" + m.id() + "'");
         e.claim = m.claim();
     }
@@ -628,7 +642,7 @@ Status ModuleSet::step(const Eigen::Ref<const Eigen::VectorXd>& q, const Eigen::
         if (!m.running_ || !m.enabled_ || m.held_by_ == nullptr) continue;
         view(e);
         ++m.preempted_;
-        if (e.claim.on_held == OnHeld::abort)
+        if (e.claim.on_held == OnHeld::abort && m.held_by_ != &s.synchronization_holder)
             if (Status st = m.on_preempted(cycle, *m.held_by_); !st)
                 return with_context(st.error(), "module '" + m.id() + "'");
     }
@@ -653,6 +667,13 @@ Status ModuleSet::step(const Eigen::Ref<const Eigen::VectorXd>& q, const Eigen::
     }
     ++s.cycle;
     return s.solver.solve(s.q, measured, dt, out);
+}
+
+Status ModuleSet::set_synchronization_hold(const Mask& dofs) {
+    if (dofs.size() != static_cast<std::size_t>(impl_->model->nv()))
+        return make_error(ErrorCode::invalid_argument, "module set: synchronization mask size != nv");
+    impl_->synchronization_hold = dofs;
+    return {};
 }
 
 void ModuleSet::resynchronize(bool rebase) noexcept {

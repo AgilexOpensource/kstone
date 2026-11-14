@@ -93,6 +93,9 @@ struct EngineOptions {
     std::vector<std::string> feedback_joints;
     /// >= 1; run() returns the error once this many consecutive cycles failed, and keeps cycling before that.
     int max_failed_cycles{5};
+    /// Out-of-limit scalar synchronization starts at raw feedback and uses JointTrajectory's continuous
+    /// Ruckig profile (acceleration = 2 * guarded model velocity, jerk = 10 * acceleration).
+    /// Relevant modules are held/rebased until arrival; other feedback groups remain independent.
     CommandGuardOptions safety;
     ThreadOptions thread;
 };

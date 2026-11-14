@@ -89,6 +89,9 @@ struct JointTrajectory::Impl {
     bool active{false};
     bool seeded_limits{false};
     double tau{0.0};
+    Eigen::VectorXd saved_reference, saved_velocity, saved_acceleration, saved_limits;
+    bool saved_active{false}, saved_seeded_limits{false};
+    double saved_tau{0.0};
 
     void reset() noexcept {
         active = false;
@@ -135,6 +138,10 @@ Result<JointTrajectory> JointTrajectory::create(Eigen::Index size, JointTrajecto
     impl->acceleration = Eigen::VectorXd::Zero(size);
     impl->limits = Eigen::VectorXd::Zero(size);
     impl->error = Eigen::VectorXd::Zero(size);
+    impl->saved_reference = impl->reference;
+    impl->saved_velocity = impl->velocity;
+    impl->saved_acceleration = impl->acceleration;
+    impl->saved_limits = impl->limits;
     return JointTrajectory(std::move(impl));
 }
 
@@ -152,6 +159,29 @@ Status JointTrajectory::configure(const JointTrajectoryConfig& config) {
 
 const JointTrajectoryConfig& JointTrajectory::config() const noexcept { return impl_->config; }
 void JointTrajectory::reset() noexcept { impl_->reset(); }
+
+void JointTrajectory::checkpoint() noexcept {
+    Impl& s = *impl_;
+    s.saved_reference = s.reference;
+    s.saved_velocity = s.velocity;
+    s.saved_acceleration = s.acceleration;
+    s.saved_limits = s.limits;
+    s.saved_active = s.active;
+    s.saved_seeded_limits = s.seeded_limits;
+    s.saved_tau = s.tau;
+}
+
+void JointTrajectory::rollback() noexcept {
+    Impl& s = *impl_;
+    s.reference = s.saved_reference;
+    s.velocity = s.saved_velocity;
+    s.acceleration = s.saved_acceleration;
+    s.limits = s.saved_limits;
+    s.active = s.saved_active;
+    s.seeded_limits = s.saved_seeded_limits;
+    s.tau = s.saved_tau;
+    // update() always resets/replans the generator, and step() rewrites its complete input.
+}
 
 Status JointTrajectory::step(const Eigen::Ref<const Eigen::VectorXd>& measured,
                              const Eigen::Ref<const Eigen::VectorXd>& target,

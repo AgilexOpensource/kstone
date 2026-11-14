@@ -6,6 +6,7 @@
 #include "kstone/module/builtins.hpp"
 #include "kstone/module/registry.hpp"
 #include "kstone/module/yaml.hpp"
+#include "kstone/motion/joint_trajectory.hpp"
 #include "kstone/runtime/config.hpp"
 #include "kstone/runtime/snapshot.hpp"
 
@@ -751,6 +752,7 @@ class StampedRobot final : public RobotInterface {
     }
     Status write(const RobotCommand& command) override {
         ++writes;
+        if (fail_write) return make_error(ErrorCode::io_error, "simulated write failure");
         last_fresh = command.fresh;
         last_groups = command.group_attached;
         return inner_.write(command);
@@ -760,6 +762,7 @@ class StampedRobot final : public RobotInterface {
     std::vector<std::uint8_t> last_groups;
     int writes{0};
     bool last_fresh{false};
+    bool fail_write{false};
     Eigen::VectorXd offset;  ///< Added to the reported q (simulated drift).
 
   private:
@@ -774,7 +777,7 @@ struct StampedFixture {
 
 StampedFixture make_stamped(double feedback_timeout_s, std::vector<std::string> feedback_joints = {},
                             bool stamped = true, std::vector<FeedbackGroup> groups = {}, bool outside = false,
-                            bool frame = false, bool coupled = false) {
+                            bool frame = false, bool coupled = false, double velocity_scale = 1.0) {
     auto model = Model::load(ModelSource::file((kFixtures / "arm.urdf").string()), {}, Context::defaults());
     REQUIRE(model);
     auto set = ModuleSet::create(*model);
@@ -810,6 +813,7 @@ StampedFixture make_stamped(double feedback_timeout_s, std::vector<std::string> 
     options.feedback_timeout_s = feedback_timeout_s;
     options.feedback_joints = std::move(feedback_joints);
     options.feedback_groups = std::move(groups);
+    options.safety.velocity_scale = velocity_scale;
     auto e = Engine::create(std::move(*set), robot, options, context);
     REQUIRE_MESSAGE(e, message(e));
     return {clock, robot, std::move(*e)};
@@ -897,28 +901,124 @@ void check_clipped_targets(const Engine& engine) {
 }
 }  // namespace
 
-TEST_CASE(
-    "engine: out-of-range startup clips commands and seeds joint/FK targets without altering feedback") {
+TEST_CASE("engine: synchronization transition starts raw and follows actual Ruckig to completion") {
     for (const bool frame : {false, true}) {
-        CAPTURE(frame);
-        StampedFixture f = make_stamped(0.0, {}, true, {}, true, frame);
-        const Eigen::VectorXd raw = f.engine.state().q;
-        CHECK_FALSE(raw.isApprox(clipped_feedback(f.engine), 1e-12));
-        CHECK(f.engine.ideal().isApprox(clipped_feedback(f.engine), 1e-12));
-        REQUIRE(f.engine.step(0.01));
-        CHECK(f.engine.state().q.isApprox(raw, 1e-12));
-        check_clipped_targets(f.engine);
-        for (int k = 2; k <= 10; ++k) {
-            REQUIRE(f.engine.step(0.01 * k));
+        for (const double scale : {1.0, 0.25}) {
+            CAPTURE(frame);
+            CAPTURE(scale);
+            StampedFixture f = make_stamped(0.0, {}, true, {}, true, frame, false, scale);
+            const auto& model = *f.engine.modules().model();
+            const Eigen::VectorXd raw = f.engine.state().q;
+            const Eigen::VectorXd target = clipped_feedback(f.engine);
+            REQUIRE_FALSE(raw.isApprox(target, 1e-12));
+            CHECK(f.engine.ideal().isApprox(raw, 1e-12));
+            std::vector<Index> qs, vs;
+            for (const char* name : {"j1", "j2", "j4", "finger_left_joint"}) {
+                const auto& joint = model.joints()[*model.joint_id(name)];
+                qs.push_back(joint.idx_q);
+                vs.push_back(joint.idx_v);
+            }
+            auto trajectory = JointTrajectory::create(4);
+            REQUIRE(trajectory);
+            Eigen::VectorXd seed(4), goal(4), limits(4);
+            for (std::size_t k = 0; k < 4; ++k) {
+                const Index i = static_cast<Index>(k);
+                seed[i] = raw[qs[k]];
+                goal[i] = target[qs[k]];
+                limits[i] = model.velocity_limit()[vs[k]] * scale;
+            }
+            const Eigen::VectorXd zero = Eigen::VectorXd::Zero(model.nv());
+            const Eigen::VectorXd trajectory_zero = Eigen::VectorXd::Zero(4);
+            REQUIRE(f.engine.step(0.01));
+            CHECK(f.engine.state().q.isApprox(raw, 1e-12));
+            CHECK(f.engine.command().q.isApprox(raw, 1e-12));
+            CHECK(f.engine.command().v.isZero(1e-12));
+            Eigen::VectorXd previous = raw, previous_v = zero, previous_a = zero;
+            for (int cycle = 2; cycle <= 400; ++cycle) {
+                REQUIRE_MESSAGE(trajectory->step(seed, goal, trajectory_zero, limits, 0.01), "Ruckig oracle");
+                REQUIRE_MESSAGE(f.engine.step(cycle * 0.01), "transition cycle failed");
+                const auto& q = f.engine.command().q;
+                const auto& v = f.engine.command().v;
+                CHECK(f.engine.ideal().isApprox(q, 1e-12));
+                const Eigen::VectorXd a = (v - previous_v) / 0.01;
+                for (std::size_t k = 0; k < 4; ++k) {
+                    const Index i = static_cast<Index>(k);
+                    const Index iq = qs[k], iv = vs[k];
+                    CHECK(q[iq] == doctest::Approx(trajectory->reference()[i]).epsilon(1e-10));
+                    CHECK(v[iv] == doctest::Approx(trajectory->velocity()[i]).epsilon(1e-10));
+                    CHECK(std::abs(q[iq] - previous[iq]) <= limits[i] * 0.01 + 1e-10);
+                    CHECK(std::abs(v[iv]) <= limits[i] + 1e-10);
+                    CHECK(std::abs(a[iv]) <= 2.0 * limits[i] + 1e-10);
+                    CHECK(std::abs(a[iv] - previous_a[iv]) <= 20.0 * limits[i] * 0.01 + 1e-9);
+                    CHECK(std::abs(q[iq] - target[iq]) <= std::abs(previous[iq] - target[iq]) + 1e-10);
+                }
+                previous = q;
+                previous_v = v;
+                previous_a = a;
+            }
+            CHECK(previous.isApprox(target, 1e-10));
+            CHECK(previous_v.isZero(1e-10));
             check_clipped_targets(f.engine);
+            CHECK(f.engine.stats().guard_rejects == 0);
         }
-        CHECK(f.engine.stats().guard_rejects == 0);
     }
 }
 
-TEST_CASE("engine: coupled idle claims cannot leave held FK targets stale across clipped synchronization") {
+TEST_CASE("engine: unattached settling writes do not consume the first attached transition command") {
+    StampedFixture f = make_stamped(0.25, {}, true, {}, true);
+    const Eigen::VectorXd initial = f.engine.state().q;
+    // The adapter accepts internal writes but forwards only attached ones, just like the ROS node.
+    for (int k = 1; k < 25; ++k) {
+        f.clock->advance_ns(10'000'000);
+        f.robot->stamp_ns = f.clock->now_ns();
+        REQUIRE(f.engine.step(k * 0.01));
+        CHECK_FALSE(f.engine.attached());
+        CHECK_FALSE(f.robot->last_fresh);
+        CHECK(f.engine.command().q.isApprox(initial, 1e-12));
+        CHECK(f.engine.command().v.isZero(1e-12));
+    }
+    // Latest feedback, not the first sample of the settling window, seeds delivery.
+    f.robot->offset = Eigen::VectorXd::Zero(initial.size());
+    f.robot->offset[iq(f.engine, "j1")] = 0.01;
+    f.clock->advance_ns(10'000'000);
+    f.robot->stamp_ns = f.clock->now_ns();
+    REQUIRE(f.engine.step(0.25));
+    REQUIRE(f.engine.attached());
+    CHECK(f.robot->last_fresh);
+    const Eigen::VectorXd raw = f.engine.state().q;
+    CHECK(raw[iq(f.engine, "j1")] == doctest::Approx(initial[iq(f.engine, "j1")] + 0.01));
+    CHECK(f.engine.command().q.isApprox(raw, 1e-12));
+    CHECK(f.engine.command().v.isZero(1e-12));
+    f.robot->offset.setZero();
+    const Eigen::VectorXd goal = clipped_feedback(f.engine);
+    auto trajectory = JointTrajectory::create(4);
+    REQUIRE(trajectory);
+    const auto& model = *f.engine.modules().model();
+    const auto& joint = model.joints()[*model.joint_id("j1")];
+    Eigen::VectorXd seed(4), target(4), velocity(4);
+    int coordinate = 0;
+    for (const char* name : {"j1", "j2", "j4", "finger_left_joint"}) {
+        const auto& j = model.joints()[*model.joint_id(name)];
+        seed[coordinate] = raw[j.idx_q];
+        target[coordinate] = goal[j.idx_q];
+        velocity[coordinate++] = model.velocity_limit()[j.idx_v];
+    }
+    const Eigen::VectorXd zero = Eigen::VectorXd::Zero(4);
+    for (int k = 26; k <= 225; ++k) {
+        f.clock->advance_ns(10'000'000);
+        f.robot->stamp_ns = f.clock->now_ns();
+        REQUIRE(f.engine.step(k * 0.01));
+        REQUIRE(trajectory->step(seed, target, zero, velocity, 0.01));
+        CHECK(f.engine.command().q[joint.idx_q] ==
+              doctest::Approx(trajectory->reference()[0]).epsilon(1e-10));
+        CHECK(f.engine.command().v[joint.idx_v] == doctest::Approx(trajectory->velocity()[0]).epsilon(1e-10));
+    }
+    CHECK(f.engine.command().q.isApprox(goal, 1e-9));
+}
+
+TEST_CASE("engine: synchronization rebases held FK targets and releases coupled idle claims coherently") {
     StampedFixture f = make_stamped(0.0, {}, true, {}, true, true, true);
-    REQUIRE(f.engine.step(0.01));
+    for (int k = 1; k <= 300; ++k) REQUIRE(f.engine.step(k * 0.01));
     auto frame = std::dynamic_pointer_cast<FrameTargetModule>(f.engine.modules().module("arm"));
     REQUIRE(frame);
     CHECK_FALSE(frame->running());
@@ -932,17 +1032,17 @@ TEST_CASE("engine: coupled idle claims cannot leave held FK targets stale across
     REQUIRE(frame->set_target(goal));
     auto idle = std::dynamic_pointer_cast<JointTargetModule>(f.engine.modules().module("arm_idle"));
     REQUIRE(idle->set_target(idle->target()));
-    REQUIRE(f.engine.step(0.02));
+    REQUIRE(f.engine.step(3.01));
     CHECK_FALSE(frame->running());
     CHECK(frame->has_target());
     f.engine.modules().resynchronize(true);
-    REQUIRE(f.engine.step(0.03));
+    REQUIRE(f.engine.step(3.02));
     CHECK_FALSE(frame->running());
     CHECK_FALSE(frame->has_target());
     CHECK(frame->target().matrix().isApprox(expected.matrix(), 1e-12));
 }
 
-TEST_CASE("engine: reattach and pause resume clip feedback before joint/FK reset and drop detached targets") {
+TEST_CASE("engine: synchronization transition reattach and pause resume start raw and do not stall") {
     for (const bool frame : {false, true}) {
         CAPTURE(frame);
         StampedFixture f = make_stamped(0.05, {}, true, {}, true, frame);
@@ -954,9 +1054,14 @@ TEST_CASE("engine: reattach and pause resume clip feedback before joint/FK reset
             REQUIRE(f.engine.step(time));
         };
         step(0, true);
-        check_clipped_targets(f.engine);
+        CHECK(f.engine.command().q.isApprox(f.engine.state().q, 1e-12));
+        const auto first = f.engine.command().q.eval();
         step(50'000'000, true);
         REQUIRE(f.engine.attached());
+        CHECK(f.engine.command().q.isApprox(first, 1e-12));
+        CHECK(f.engine.command().v.isZero(1e-12));
+        step(10'000'000, true);
+        CHECK_FALSE(f.engine.command().q.isApprox(first, 1e-12));
         auto arm = f.engine.modules().module("arm");
         if (auto ft = std::dynamic_pointer_cast<FrameTargetModule>(arm)) {
             auto goal = ft->target();
@@ -975,11 +1080,15 @@ TEST_CASE("engine: reattach and pause resume clip feedback before joint/FK reset
         f.robot->offset[iq(f.engine, "j4")] = -0.03;
         step(0, true);
         CHECK_FALSE(f.engine.state().q.isApprox(clipped_feedback(f.engine), 1e-12));
-        check_clipped_targets(f.engine);
+        CHECK(f.engine.command().q.isApprox(f.engine.state().q, 1e-12));
+        const auto reattach = f.engine.command().q.eval();
         f.robot->offset.setZero();
         step(50'000'000, true);
         REQUIRE(f.engine.attached());
-        check_clipped_targets(f.engine);
+        CHECK(f.engine.command().q.isApprox(reattach, 1e-12));
+        CHECK(f.engine.command().v.isZero(1e-12));
+        step(10'000'000, true);
+        CHECK_FALSE(f.engine.command().q.isApprox(reattach, 1e-12));
         if (auto ft = std::dynamic_pointer_cast<FrameTargetModule>(arm)) CHECK_FALSE(ft->has_target());
         f.engine.set_paused(true);
         f.robot->offset[iq(f.engine, "j1")] = 0.2;
@@ -988,7 +1097,93 @@ TEST_CASE("engine: reattach and pause resume clip feedback before joint/FK reset
         f.engine.set_paused(false);
         step(0, true);
         CHECK_FALSE(f.engine.state().q.isApprox(clipped_feedback(f.engine), 1e-12));
+        CHECK(f.engine.command().q.isApprox(f.engine.state().q, 1e-12));
+        f.robot->offset.setZero();
+        REQUIRE(f.engine.set_rate_hz(50));
+        for (int k = 0; k < 200; ++k) step(20'000'000, true);
         check_clipped_targets(f.engine);
+    }
+}
+
+TEST_CASE("engine: synchronization transition derives mimic position and velocity through completion") {
+    auto f = make_stamped(0.0);
+    REQUIRE(f.engine.step(0.01));
+    f.engine.set_paused(true);
+    f.robot->offset = Eigen::VectorXd::Zero(f.engine.state().q.size());
+    const Index leader = iq(f.engine, "finger_left_joint"), follower = iq(f.engine, "finger_right_joint");
+    f.robot->offset[leader] = 0.07;
+    f.robot->offset[follower] = 0.3;
+    REQUIRE(f.engine.step(0.02));
+    f.engine.set_paused(false);
+    REQUIRE(f.engine.step(0.03));
+    CHECK(f.engine.command().q[leader] == doctest::Approx(0.07));
+    CHECK(f.engine.command().q[follower] == doctest::Approx(-0.07));
+    CHECK(f.engine.state().q[follower] == doctest::Approx(0.3));
+    f.robot->offset.setZero();
+    const auto& m = *f.engine.modules().model();
+    const Index lv = m.joints()[*m.joint_id("finger_left_joint")].idx_v;
+    const Index fv = m.joints()[*m.joint_id("finger_right_joint")].idx_v;
+    double previous = 0.07;
+    for (int k = 4; k <= 200; ++k) {
+        REQUIRE(f.engine.step(k * 0.01));
+        const auto& c = f.engine.command();
+        CHECK(c.q[follower] == doctest::Approx(-c.q[leader]));
+        CHECK(c.v[fv] == doctest::Approx(-c.v[lv]));
+        INFO("cycle=", k, ", delta=", c.q[leader] - previous, ", remaining=", previous - 0.04);
+        CHECK(c.q[leader] <= previous + 1e-8);  // Ruckig's numerical convergence near the endpoint.
+        CHECK(std::abs(c.q[leader] - previous) <= 0.2 * 0.01 + 1e-10);
+        previous = c.q[leader];
+    }
+    CHECK(previous == doctest::Approx(0.04));
+}
+
+TEST_CASE("engine: synchronization transition write failure rolls back Ruckig without hidden advancement") {
+    auto f = make_stamped(0.0, {}, true, {}, true);
+    auto reference = make_stamped(0.0, {}, true, {}, true);
+    f.robot->fail_write = true;
+    CHECK_FALSE(f.engine.step(0.01));
+    CHECK_FALSE(f.engine.written());
+    f.robot->fail_write = false;
+    REQUIRE(f.engine.step(0.01));
+    REQUIRE(reference.engine.step(0.01));
+    CHECK(f.engine.command().q == reference.engine.command().q);
+    CHECK(f.engine.command().v.isZero(1e-12));
+    const auto before = f.engine.ideal().eval();
+    f.robot->fail_write = true;
+    CHECK_FALSE(f.engine.step(0.02));
+    CHECK_FALSE(f.engine.written());
+    CHECK(f.engine.ideal().isApprox(before, 1e-12));
+    f.robot->fail_write = false;
+    for (int k = 2; k <= 200; ++k) {
+        REQUIRE(f.engine.step(k * 0.01));
+        REQUIRE(reference.engine.step(k * 0.01));
+        CHECK(f.engine.command().q.isApprox(reference.engine.command().q, 1e-12));
+        CHECK(f.engine.command().v.isApprox(reference.engine.command().v, 1e-12));
+    }
+}
+
+TEST_CASE("engine: synchronization transition leaves unrelated modules and feedback groups running") {
+    for (bool separate_groups : {false, true}) {
+        const std::vector<FeedbackGroup> groups =
+            separate_groups ? std::vector<FeedbackGroup>{{"arm", {"j1", "j2", "j3"}}, {"wrist", {"j4"}}}
+                            : std::vector<FeedbackGroup>{};
+        auto f = make_stamped(0.0, {}, true, groups);
+        REQUIRE(f.engine.step(0.01));
+        auto arm = std::dynamic_pointer_cast<JointTargetModule>(f.engine.modules().module("arm"));
+        REQUIRE(arm);
+        REQUIRE(arm->set_target({"j1"}, Eigen::VectorXd::Constant(1, 0.5)));
+        f.engine.set_paused(true);
+        f.robot->offset = Eigen::VectorXd::Zero(f.engine.state().q.size());
+        f.robot->offset[iq(f.engine, "j4")] = -0.1;
+        REQUIRE(f.engine.step(0.02));
+        f.engine.set_paused(false);
+        REQUIRE(f.engine.step(0.03));
+        CHECK(f.engine.command().q[iq(f.engine, "j4")] == doctest::Approx(-0.1));
+        f.robot->offset.setZero();
+        for (int k = 4; k <= 30; ++k) REQUIRE(f.engine.step(k * 0.01));
+        CHECK(arm->running());
+        CHECK(f.engine.command().q[iq(f.engine, "j1")] > 0.001);
+        CHECK(f.engine.command().q[iq(f.engine, "j4")] > -0.1);
     }
 }
 
