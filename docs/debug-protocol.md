@@ -20,7 +20,7 @@ The debug server (`kstone run --serve`, `Engine.serve` or `DebugServer`) speaks 
 | `hello` | On connect |
 | `model` | Once authenticated |
 | `params`, `solver_params`, `joint_limits` | After `model`, and to every client after a successful tune |
-| `state` | Per subscription |
+| `state` | Per subscription; `groups` lists each feedback group's `name`, `fresh`, `attached` and `deviation` (largest \|measured − commanded\| position in the last cycle) |
 | `reply` | For every request |
 
 | Client to server | Purpose |
@@ -31,12 +31,13 @@ The debug server (`kstone run --serve`, `Engine.serve` or `DebugServer`) speaks 
 | `home_all` | Home every homeable module currently in control (`ModuleSet::home_all`) |
 | `tune`, `tune_solver`, `tune_limits` | Change module, solver or joint limit parameters |
 | `pause`, `step`, `set_rate` | Pause the engine, step while paused, change the control rate |
+| `resync` | Sync attached feedback groups to their measurement on the next unpaused cycle (`Engine::request_resync`). Optional `group` (a name from `state.groups`, default all) and `rebase` (default `true`: drop held targets so the command holds the measurement; `false`: keep them and move there from the measurement) |
 | `asset` | Fetch a file the URDF references, such as a mesh; only when listed in `capabilities`. `model.assets` lists the files, each with a `size` and a `stamp` that changes when the file changes; a file changed since then fails with `io_error` |
 
-The ops `set_port` through `set_rate` in the table are commands. Arbitration works like this:
+The ops `set_port` through `resync` in the table are commands. Arbitration works like this:
 
 - Clients are equal: any client may command, and the last write wins.
-- Motion ports (the frame and joint targets and the chassis motion ports) give your own code priority. After your code writes one (`write_port`, a setter or the chassis controller, not through the server), it is held for `api_hold_s` (default 1 s). Server `set_port` on any motion port of that module gets `api_owned`. Everything else, including `home`, tuning, enabling, pausing and stepping, is last-write-wins. `state` lists held ports per module in `api_held`.
+- Motion ports (the frame and joint targets and the chassis motion ports) give your own code priority. After your code writes one (`write_port`, a setter or the chassis controller, not through the server), it is held for `api_hold_s` (default 1 s). Server `set_port` on any motion port of that module gets `api_owned`. Everything else, including `home`, tuning, enabling, pausing, stepping and resyncing, is last-write-wins. `state` lists held ports per module in `api_held`.
 - A rejected command is dropped, never queued or replayed. Once the hold ends the port keeps the last value your code wrote until a client sends a new command.
 
 ## Errors and limits

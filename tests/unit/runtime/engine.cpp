@@ -1187,6 +1187,52 @@ TEST_CASE("engine: synchronization transition leaves unrelated modules and feedb
     }
 }
 
+TEST_CASE("engine: request_resync syncs the chosen attached groups on the next unpaused cycle") {
+    const std::vector<FeedbackGroup> groups{{"arm", {"j1", "j2", "j3"}}, {"wrist", {"j4"}}};
+    auto f = make_stamped(0.0, {}, true, groups);
+    REQUIRE(f.engine.step(0.01));
+    REQUIRE(f.engine.group_attached(0));
+    REQUIRE(f.engine.group_attached(1));
+    CHECK(f.engine.request_resync(f.engine.group_count()).error().code == ErrorCode::invalid_argument);
+    auto arm = std::dynamic_pointer_cast<JointTargetModule>(f.engine.modules().module("arm"));
+    REQUIRE(arm);
+    const Eigen::Index j1 = iq(f.engine, "j1"), j4 = iq(f.engine, "j4");
+
+    // The robot ignored the commands (e.g. behind a closed gate): measurements sit away from them.
+    f.robot->offset = Eigen::VectorXd::Zero(f.engine.state().q.size());
+    f.robot->offset[j1] = 0.2;
+    f.robot->offset[j4] = -0.1;
+    REQUIRE(f.engine.step(0.02));
+    CHECK(f.engine.group_deviation(0) == doctest::Approx(0.2));
+    CHECK(f.engine.group_deviation(1) == doctest::Approx(0.1));
+    CHECK(f.engine.group_deviation(f.engine.group_count()) == 0.0);
+
+    const auto resyncs = f.engine.stats().resyncs;
+    REQUIRE(f.engine.request_resync(1));
+    REQUIRE(f.engine.step(0.03));
+    CHECK(f.engine.stats().resyncs == resyncs + 1);
+    CHECK(f.engine.command().q[j4] == doctest::Approx(f.engine.state().q[j4]));
+    CHECK(f.engine.group_deviation(1) < 1e-9);
+    CHECK(f.engine.group_deviation(0) == doctest::Approx(0.2));
+
+    // Paused cycles keep the request; rebase drops the held target so the command holds the measurement.
+    REQUIRE(arm->set_target({"j1"}, Eigen::VectorXd::Constant(1, 0.5)));
+    f.engine.set_paused(true);
+    REQUIRE(f.engine.request_resync());
+    REQUIRE(f.engine.step(0.04));
+    CHECK(f.engine.stats().resyncs == resyncs + 1);
+    f.engine.set_paused(false);
+    REQUIRE(f.engine.step(0.05));
+    CHECK(f.engine.group_deviation(0) < 1e-9);
+    CHECK(arm->target()[0] == doctest::Approx(f.engine.state().q[j1]));
+
+    // Without rebase the target is kept and reached from the measurement.
+    REQUIRE(arm->set_target({"j1"}, Eigen::VectorXd::Constant(1, 0.5)));
+    REQUIRE(f.engine.request_resync(0, false));
+    REQUIRE(f.engine.step(0.06));
+    CHECK(arm->target()[0] == doctest::Approx(0.5));
+}
+
 TEST_CASE("engine: stale feedback detaches, reattaching holds then syncs again after the timeout") {
     StampedFixture f = make_stamped(0.05);
     auto arm = std::dynamic_pointer_cast<JointTargetModule>(f.engine.modules().module("arm"));

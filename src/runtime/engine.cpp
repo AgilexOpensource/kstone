@@ -420,11 +420,12 @@ struct Engine::Impl {
     std::atomic<bool> paused{false};
     std::atomic<std::uint64_t> passes{0};
     std::atomic<bool> resume_pending{false};
-    std::atomic<double> pending_rate{0.0};  ///< > 0: rate_hz to switch to at the next cycle.
-    double held_time{0.0};                  ///< Engine time spent paused; module time is `now` minus this.
-    bool stepped{false};   ///< A cycle has succeeded; `now` must not go below stats.time after that.
-    bool fresh{true};      ///< All groups.
-    bool attached{false};  ///< All groups.
+    std::atomic<std::uint64_t> resync_pending{0};  ///< Low 32 bits: groups to sync; high 32: rebase them.
+    std::atomic<double> pending_rate{0.0};         ///< > 0: rate_hz to switch to at the next cycle.
+    double held_time{0.0};  ///< Engine time spent paused; module time is `now` minus this.
+    bool stepped{false};    ///< A cycle has succeeded; `now` must not go below stats.time after that.
+    bool fresh{true};       ///< All groups.
+    bool attached{false};   ///< All groups.
     bool written{false};
 
     struct Mimic {
@@ -895,8 +896,11 @@ Status Engine::step_impl(double now) {
         d.stats.held_cycles++;
     } else {
         const bool resume = d.resume_pending.exchange(false, std::memory_order_acq_rel);
+        const std::uint64_t resync = d.resync_pending.exchange(0, std::memory_order_acq_rel);
         for (std::size_t i = 0; i < d.groups.size(); ++i) {
             Impl::Group& g = d.groups[i];
+            const bool resync_g = i < 32 && ((resync >> i) & 1u) != 0;
+            const bool rebase_g = resync_g && ((resync >> (32 + i)) & 1u) != 0;
             if (g.fresh && !g.attached) {
                 // Track the robot through the window; counted once per detach. Targets set before the robot
                 // state was known are dropped.
@@ -911,8 +915,8 @@ Status Engine::step_impl(double now) {
                     d.stats.attaches++;
                     g.transition_window = false;
                 }
-            } else if (g.attached && resume) {
-                if (auto s = d.sync_group(i, true, false); !s) return s;
+            } else if (g.attached && (resume || resync_g)) {
+                if (auto s = d.sync_group(i, true, rebase_g); !s) return s;
             }
         }
         d.attached = true;
@@ -1096,6 +1100,17 @@ bool Engine::paused() const noexcept { return impl_->paused.load(std::memory_ord
 void Engine::step_paused(std::uint64_t cycles) noexcept {
     impl_->passes.fetch_add(cycles, std::memory_order_acq_rel);
 }
+Status Engine::request_resync(std::size_t group, bool rebase) {
+    const std::size_t n = impl_->groups.size();
+    if (n > 32) return make_error(ErrorCode::unsupported, "resync supports at most 32 feedback groups");
+    if (group != all_groups && group >= n)
+        return make_error(ErrorCode::invalid_argument,
+                          "resync: unknown feedback group " + std::to_string(group));
+    const std::uint64_t groups =
+        group == all_groups ? (n == 32 ? 0xffffffffull : ((1ull << n) - 1)) : (1ull << group);
+    impl_->resync_pending.fetch_or(rebase ? groups | (groups << 32) : groups, std::memory_order_acq_rel);
+    return {};
+}
 
 Status Engine::set_rate_hz(double rate_hz) {
     if (!std::isfinite(rate_hz) || rate_hz <= 0.0 || std::llround(1e9 / rate_hz) <= 0)
@@ -1129,6 +1144,16 @@ bool Engine::group_fresh(std::size_t i) const noexcept {
 }
 bool Engine::group_attached(std::size_t i) const noexcept {
     return i < impl_->groups.size() && impl_->groups[i].attached;
+}
+double Engine::group_deviation(std::size_t i) const noexcept {
+    if (i >= impl_->groups.size()) return 0.0;
+    const Eigen::VectorXd& q = impl_->state.q;
+    const Eigen::VectorXd& c = impl_->command.q;
+    double out = 0.0;
+    for (const auto& [start, size] : impl_->groups[i].q_segments)
+        if (start + size <= q.size() && start + size <= c.size())
+            out = std::max(out, (q.segment(start, size) - c.segment(start, size)).cwiseAbs().maxCoeff());
+    return out;
 }
 const Eigen::VectorXd& Engine::ideal() const noexcept { return impl_->ideal_q; }
 const Eigen::VectorXd* Engine::measured() const noexcept {

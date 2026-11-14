@@ -22,7 +22,7 @@
 | `hello` | 连上时 |
 | `model` | 认证通过后 |
 | `params`、`solver_params`、`joint_limits` | `model` 之后，以及调参成功后发给所有客户端 |
-| `state` | 按订阅频率 |
+| `state` | 按订阅频率；`groups` 列出每个反馈组的 `name`、`fresh`、`attached` 和 `deviation`（上一周期实测与命令位置之差的最大绝对值） |
 | `reply` | 每个请求一条 |
 
 | 客户端到服务端 | 用途 |
@@ -33,12 +33,13 @@
 | `home_all` | 让当前持有控制权的可回 home 模块全部回 home（`ModuleSet::home_all`） |
 | `tune`、`tune_solver`、`tune_limits` | 修改模块、求解器或关节限位参数 |
 | `pause`、`step`、`set_rate` | 暂停引擎、暂停时单步、修改控制频率 |
+| `resync` | 在下一个未暂停周期把已挂接的反馈组同步到实测（`Engine::request_resync`）。可选 `group`（`state.groups` 中的组名，默认全部）和 `rebase`（默认 `true`：丢弃保持的目标，命令停在实测位置；`false`：保留目标，从实测位置走过去） |
 | `asset` | 获取 URDF 引用的文件（如网格）；仅当 `capabilities` 中列出时可用。`model.assets` 列出这些文件，每个带 `size` 和 `stamp`，文件变化时 `stamp` 随之变化；此后被改动的文件返回 `io_error` |
 
-表中 `set_port` 到 `set_rate` 这些 op 属于命令。仲裁规则如下：
+表中 `set_port` 到 `resync` 这些 op 属于命令。仲裁规则如下：
 
 - 客户端之间平等：任何客户端都可以发命令，最后写入的生效。
-- 运动端口（frame 和关节目标、底盘运动端口）优先给你的代码。你的代码（`write_port`、setter 或底盘控制器，不经服务端）写入后，该端口保持 `api_hold_s`（默认 1 秒），此期间服务端对该模块任一运动端口的 `set_port` 返回 `api_owned`。其他操作（包括 `home`、调参、启用、暂停和单步）都按最后写入生效。`state` 的每个模块用 `api_held` 列出被保持的端口。
+- 运动端口（frame 和关节目标、底盘运动端口）优先给你的代码。你的代码（`write_port`、setter 或底盘控制器，不经服务端）写入后，该端口保持 `api_hold_s`（默认 1 秒），此期间服务端对该模块任一运动端口的 `set_port` 返回 `api_owned`。其他操作（包括 `home`、调参、启用、暂停、单步和重新同步）都按最后写入生效。`state` 的每个模块用 `api_held` 列出被保持的端口。
 - 被拒绝的命令直接丢弃，不排队也不重放。保持结束后端口维持代码最后写入的值，直到客户端发来新命令。
 
 <a id="errors-and-limits"></a>

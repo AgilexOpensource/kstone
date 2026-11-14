@@ -68,8 +68,9 @@ class Ring {
 using SteadyClock = std::chrono::steady_clock;
 
 constexpr int kProtocolVersion = 1;
-constexpr const char* kCommandOps[] = {"set_port", "set_enabled", "home",     "tune",        "tune_solver",
-                                       "pause",    "step",        "set_rate", "tune_limits", "home_all"};
+constexpr const char* kCommandOps[] = {"set_port",    "set_enabled", "home",  "tune",
+                                       "tune_solver", "pause",       "step",  "set_rate",
+                                       "tune_limits", "home_all",    "resync"};
 constexpr double kMaxTimeoutS = 60.0;
 constexpr auto kAuthGrace = std::chrono::seconds(5);  // Unauthenticated connections are dropped after this.
 constexpr std::size_t kMinToken = 16;
@@ -85,7 +86,8 @@ enum class Op {
     step,
     set_rate,
     tune_limits,
-    home_all
+    home_all,
+    resync
 };
 constexpr double kMaxStepCycles = 1e6;
 constexpr double kMaxRateHz = 1e4;
@@ -101,6 +103,7 @@ struct Command {
     std::vector<Eigen::Index> elements;  ///< set_port with 'labels': the vector elements written.
     bool enabled{false};
     std::uint64_t cycles{0};
+    std::size_t group{Engine::all_groups};  ///< resync: feedback group index.
     double rate_hz{0.0};
     ConfigNode params;
     std::atomic<int> state{kPending};
@@ -153,6 +156,7 @@ struct Snapshot {
     bool attached{true};
     std::vector<std::uint8_t> group_fresh;
     std::vector<std::uint8_t> group_attached;
+    std::vector<double> group_deviation;
     double rate_hz{0.0};
     std::vector<ModuleFrame> modules;
     std::vector<TaskResidual> residuals;
@@ -438,6 +442,7 @@ struct DebugServer::Impl {
             s.q_command.setZero(engine.modules().model()->nq());
             s.group_fresh.assign(group_names.size(), 0);
             s.group_attached.assign(group_names.size(), 0);
+            s.group_deviation.assign(group_names.size(), 0.0);
             s.modules.resize(mods.size());
             for (std::size_t m = 0; m < mods.size(); ++m) {
                 s.modules[m].ports.resize(ports[m].size());
@@ -742,6 +747,9 @@ struct DebugServer::Impl {
                     case Op::home_all:
                         s = engine.modules().home_all();
                         break;
+                    case Op::resync:
+                        s = engine.request_resync(c->group, c->enabled);
+                        break;
                 }
             }
             if (Reply* r = replies.claim()) {
@@ -778,6 +786,7 @@ struct DebugServer::Impl {
         for (std::size_t g = 0; g < group_names.size(); ++g) {
             s.group_fresh[g] = engine.group_fresh(g);
             s.group_attached[g] = engine.group_attached(g);
+            s.group_deviation[g] = engine.group_deviation(g);
         }
         s.stats = engine.stats();
         const auto now = SteadyClock::now();
@@ -908,6 +917,26 @@ struct DebugServer::Impl {
         }
         if (name == "home_all") {
             cmd.op = Op::home_all;
+            return {};
+        }
+        if (name == "resync") {
+            cmd.op = Op::resync;
+            cmd.group = Engine::all_groups;
+            cmd.enabled = true;
+            if (const ConfigNode* group = doc.find("group"); group != nullptr) {
+                if (group->kind() != ConfigNode::Kind::string)
+                    return make_error(ErrorCode::invalid_argument, "resync 'group' must be a string");
+                const auto it = std::find(group_names.begin(), group_names.end(), group->as_string());
+                if (it == group_names.end())
+                    return make_error(ErrorCode::not_found,
+                                      "unknown feedback group '" + group->as_string() + "'");
+                cmd.group = static_cast<std::size_t>(it - group_names.begin());
+            }
+            if (const ConfigNode* rebase = doc.find("rebase"); rebase != nullptr) {
+                if (rebase->kind() != ConfigNode::Kind::boolean)
+                    return make_error(ErrorCode::invalid_argument, "resync 'rebase' must be a boolean");
+                cmd.enabled = rebase->as_bool();
+            }
             return {};
         }
         if (name == "tune_solver" || name == "tune_limits") {
@@ -1249,7 +1278,8 @@ struct DebugServer::Impl {
         for (std::size_t g = 0; g < group_names.size(); ++g)
             groups.append(ConfigNode::map({{"name", group_names[g]},
                                            {"fresh", s.group_fresh[g] != 0},
-                                           {"attached", s.group_attached[g] != 0}}));
+                                           {"attached", s.group_attached[g] != 0},
+                                           {"deviation", s.group_deviation[g]}}));
         doc.set("groups", std::move(groups));
         ConfigNode stats = ConfigNode::map();
         for (const StatInfo& info : kStats) stats.set(info.name, info.read(s.stats));

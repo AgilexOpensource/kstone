@@ -934,6 +934,40 @@ TEST_CASE("debug server: module visuals and display outputs") {
     fs::remove_all(dir);
 }
 
+TEST_CASE("debug server: resync op validates its fields and reports group deviation") {
+    auto e = load_engine(kFixtures / "arm_loopback.yaml");
+    REQUIRE(e);
+    DebugServerOptions options;
+    options.port = 0;
+    auto server = DebugServer::start(*e, options);
+    REQUIRE(server);
+    Client a((*server)->port());
+    a.read_type("model");
+
+    std::atomic<bool> stop{false};
+    std::thread runner([&] { CHECK(e->run(0.0, &stop)); });
+    {
+        const ConfigNode st = a.read_type("state");
+        const auto& groups = st.find("groups")->items();
+        REQUIRE(groups.size() == 1);
+        REQUIRE(groups[0].find("deviation") != nullptr);
+        CHECK(groups[0].find("deviation")->as_number() >= 0.0);
+    }
+    a.send(R"({"op":"resync","id":1})");
+    CHECK(reply_to(a, 1).find("ok")->as_bool());
+    a.send(R"({"op":"resync","id":2,"group":"default","rebase":false})");
+    CHECK(reply_to(a, 2).find("ok")->as_bool());
+    a.send(R"({"op":"resync","id":3,"group":"nope"})");
+    CHECK(code_of(reply_to(a, 3)) == "not_found");
+    a.send(R"({"op":"resync","id":4,"group":0})");
+    CHECK(code_of(reply_to(a, 4)) == "invalid_argument");
+    a.send(R"({"op":"resync","id":5,"rebase":1})");
+    CHECK(code_of(reply_to(a, 5)) == "invalid_argument");
+    stop = true;
+    runner.join();
+    (*server)->stop();
+}
+
 TEST_CASE("debug server: home_all op homes the modules in control") {
     auto e = load_engine(kFixtures / "arm_loopback.yaml");
     REQUIRE(e);

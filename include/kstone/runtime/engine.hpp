@@ -168,6 +168,13 @@ class KSTONE_EXPORT Engine {
     /// While paused, the next `cycles` cycles solve and write from the commanded state without resynchronizing
     /// (requests add up; set_paused clears them). Thread-safe.
     void step_paused(std::uint64_t cycles) noexcept;
+    /// Syncs attached group `group` (all_groups: every group) to its latest measurement on the next unpaused
+    /// cycle, as resuming does, e.g. after a driver ignored commands behind a closed gate. `rebase` drops the
+    /// held targets of the modules driving it, so the command holds the measurement; otherwise they are kept
+    /// and reached from it. Groups that are stale or still attaching already follow feedback and skip it.
+    /// Requests add up until consumed. Fails for an unknown group or more than 32 groups. Thread-safe.
+    static constexpr std::size_t all_groups = static_cast<std::size_t>(-1);
+    Status request_resync(std::size_t group = all_groups, bool rebase = true);
     /// Switches EngineOptions::rate_hz (and dt) at the start of the next cycle; run() keeps `now` continuous.
     /// Robot plugins keep the rate they were created with. Thread-safe.
     Status set_rate_hz(double rate_hz);
@@ -202,6 +209,8 @@ class KSTONE_EXPORT Engine {
     /// RobotCommand::group_attached and RobotCommand::fresh (all groups) follow it for every written command,
     /// so a command built on a state measured before the window is never flagged attached.
     bool group_attached(std::size_t i) const noexcept;
+    /// Largest |measured - commanded| over group i's position coordinates in the last cycle; 0 when i >= group_count().
+    double group_deviation(std::size_t i) const noexcept;
     const Eigen::VectorXd& ideal() const noexcept;  ///< Commanded state the next solve starts from.
     /// Last measured estimate (ideal + held tracking error of the attached groups); nullptr while no group is attached.
     const Eigen::VectorXd* measured() const noexcept;
