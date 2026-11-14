@@ -114,6 +114,7 @@ class KSTONE_EXPORT FrameTargetModule final : public Module {
     bool has_target_{false};
     bool home_in_root_{false};
     bool lock_applied_{false};
+    bool hold_observed_{false};  ///< A timed-out home: the next contribute() holds the observed pose.
     TaskHandle handle_;
     Homing home_;
     const Model* model_{nullptr};
@@ -199,7 +200,7 @@ class KSTONE_EXPORT JointTargetModule final : public Module {
     Status apply_target(const Eigen::Ref<const Eigen::VectorXd>& target);
     Status commit_partial();
     bool holds_claim() const noexcept;
-    void measure(const Cycle& cycle);
+    void read_ideal(const Cycle& cycle);
     bool arrived(const Eigen::VectorXd& goal) const;
     Status finish(HomeStatus status);
     Status step_home(const Cycle& cycle);
@@ -212,8 +213,9 @@ class KSTONE_EXPORT JointTargetModule final : public Module {
     std::vector<JointInfo> joints_;
     std::vector<bool> wrap_;
     Mask mask_;
-    Eigen::VectorXd target_, measured_, measured_v_, limit_, home_pose_, partial_;
-    std::vector<bool> seen_, fill_;  ///< fill_: omitted joints taken from measurement at the next reset().
+    Eigen::VectorXd target_, ideal_, ideal_v_, limit_, home_pose_, partial_;  ///< ideal_: from Cycle::q.
+    std::vector<bool> seen_,
+        fill_;  ///< fill_: omitted joints taken from the ideal state at the next reset().
     bool filling_{false};
     bool has_target_{false};
     bool claiming_{false};

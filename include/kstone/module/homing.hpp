@@ -47,14 +47,8 @@ class KSTONE_EXPORT Homing {
     Claim claim(const Mask& joints) const noexcept;
     /// waiting -> executing; true if it switched (begin the home motion now).
     bool start() noexcept;
-    /// succeeded / timed_out queue an alignment for the next align().
-    void finish(HomeStatus outcome) noexcept {
-        status_ = outcome;
-        align_pending_ = outcome == HomeStatus::succeeded || outcome == HomeStatus::timed_out;
-    }
-    /// Call at the end of every prepare(): after a finished homing, sets the scalar joints of `joints`
-    /// (size nv) in cycle.q to cycle.measured, so the commanded state stops carrying the tracking error.
-    void align(Cycle& cycle, const Model& model, const Mask& joints) noexcept;
+    /// Ends the homing; the module chooses the target it keeps (home if succeeded, the ideal state if timed out).
+    void finish(HomeStatus outcome) noexcept { status_ = outcome; }
 
   private:
     HomeConfig config_;
@@ -64,7 +58,6 @@ class KSTONE_EXPORT Homing {
     std::uint64_t last_index_{0};
     bool prepared_{false};
     bool timing_{false};
-    bool align_pending_{false};
 };
 
 }  // namespace kstone

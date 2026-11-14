@@ -1706,10 +1706,13 @@ TEST_CASE("frame_target module: preemptive home holds others, rejects targets an
     }
     CHECK(slow->home_status() == HomeStatus::timed_out);
     CHECK(slow->claim().joints == nullptr);
-    // Stops where the ramp was, and accepts targets again.
+    // Holds the ideal pose it reached (not home, not the ramp), and accepts targets again.
+    const Eigen::Isometry3d reached = pose_at(m, blocked, "tool");
+    slow_loop.step();
     const Eigen::Isometry3d stop = slow->target();
+    CHECK((stop.translation() - reached.translation()).norm() < 1e-9);
     slow_loop.step(100);
-    CHECK((pose_at(m, slow_loop.q, "tool").translation() - stop.translation()).norm() < 1e-3);
+    CHECK((pose_at(m, slow_loop.q, "tool").translation() - reached.translation()).norm() < 1e-3);
     CHECK(slow->set_target(stop));
 
     // Disabling aborts.
@@ -1825,7 +1828,8 @@ TEST_CASE("joint_target module: home returns to the initial posture") {
 }
 
 TEST_CASE(
-    "joint_target module: a finished home aligns q to measured once, resynchronize aborts a running home") {
+    "joint_target module: a finished home never writes q from measured, resynchronize aborts a running "
+    "home") {
     ModelPtr m = load("arm.urdf");
     ModuleSet set = make_set(m);
     JointTargetModuleConfig jc;
@@ -1837,35 +1841,33 @@ TEST_CASE(
     Loop loop{m, set, arm_pose(m, 0.1)};
     loop.step();
     Eigen::VectorXd target(3);
-    target << 0.6, -0.4, 1.0;
+    target << 0.6, -0.4, 0.3;
     REQUIRE(jt->set_target(target));
     while (!jt->settled()) loop.step();
 
     const Eigen::Index j1 = m->joints()[*m->joint_id("j1")].idx_q;
-    const Eigen::Index v1 = m->joints()[*m->joint_id("j1")].idx_v;
-    const Eigen::Index v4 = m->joints()[*m->joint_id("j4")].idx_v;
     const auto step = [&] {
         Eigen::VectorXd measured = loop.q;
         measured[j1] += 0.05;
         loop.now += loop.dt;
         const Eigen::VectorXd v = loop.out.v;
         REQUIRE(set.step(loop.q, v, &measured, loop.now, loop.dt, loop.out));
+        const double jump = std::abs(loop.out.q_next[j1] - loop.q[j1]);
         loop.q = loop.out.q_next;
-        return measured;
+        return jump;
     };
     REQUIRE(jt->request_home());
     step();
     REQUIRE(jt->home_status() == HomeStatus::executing);
-    CHECK_FALSE(set.aligned().any());
-    Eigen::VectorXd measured;
-    for (int k = 0; k < 2000 && jt->home_status() == HomeStatus::executing; ++k) measured = step();
+    double largest = 0.0;
+    for (int k = 0; k < 2000 && jt->home_status() == HomeStatus::executing; ++k)
+        largest = std::max(largest, step());
     REQUIRE(jt->home_status() == HomeStatus::succeeded);
-    CHECK(set.aligned().test(static_cast<std::size_t>(v1)));
-    CHECK_FALSE(set.aligned().test(static_cast<std::size_t>(v4)));
-    // The solve starts from measured, then the joint task pulls j1 back toward the target.
-    CHECK(std::abs(loop.q[j1] - (measured[j1] + loop.out.v[v1] * loop.dt)) < 1e-9);
-    step();
-    CHECK_FALSE(set.aligned().any());
+    // The solve keeps starting from the ideal state: no step toward the 0.05 offset, and it stays at home (neutral).
+    for (int k = 0; k < 20; ++k) largest = std::max(largest, step());
+    CHECK(largest < 0.02);
+    CHECK(std::abs(loop.q[j1]) < 1e-3);
+    CHECK(jt->target()[0] == doctest::Approx(0.0));
 
     REQUIRE(jt->set_target(target));
     while (!jt->settled()) loop.step();
@@ -1875,6 +1877,37 @@ TEST_CASE(
     set.resynchronize();
     loop.step();
     CHECK(jt->home_status() == HomeStatus::aborted);
+}
+
+TEST_CASE("joint_target module: a timed-out home holds the ideal joints it reached") {
+    ModelPtr m = load("arm.urdf");
+    ModuleSet set = make_set(m);
+    JointTargetModuleConfig jc;
+    jc.joints = {"j1", "j2", "j3"};
+    jc.home_motion.timeout_s = 0.1;
+    auto jt = std::make_shared<JointTargetModule>("joints", jc);
+    REQUIRE(set.add(jt));
+    REQUIRE(set.set_initial(arm_pose(m, 0.1)));
+    REQUIRE(set.configure());
+
+    Loop loop{m, set, arm_pose(m, 0.5)};
+    loop.step();
+    REQUIRE(jt->request_home());
+    loop.step(3);
+    REQUIRE(jt->home_status() == HomeStatus::executing);
+    const Eigen::VectorXd blocked = loop.q;
+    for (int k = 0; k < 40 && jt->home_status() == HomeStatus::executing; ++k) {
+        loop.step();
+        loop.q = blocked;
+        loop.out.v.setZero();
+    }
+    REQUIRE(jt->home_status() == HomeStatus::timed_out);
+    for (const char* j : {"j1", "j2", "j3"}) {
+        const auto k = static_cast<Eigen::Index>(j[1] - '1');
+        CHECK(jt->target()[k] == doctest::Approx(joint_q(m, blocked, j)).epsilon(1e-9));
+    }
+    loop.step(100);
+    CHECK((loop.q - blocked).norm() < 1e-3);
 }
 
 TEST_CASE("gaze module: preempted while tracking, the focus is cleared rather than frozen") {

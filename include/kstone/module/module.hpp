@@ -31,9 +31,7 @@ struct Cycle {
     const Eigen::VectorXd& v;    ///< Velocity at q (size nv; the engine passes the last command).
     const Workspace& workspace;  ///< Updated to q before reset() and contribute(); stale in prepare().
     const Eigen::VectorXd* measured{
-        nullptr};  ///< Estimated robot configuration (size nq); nullptr if unknown.
-    Mask* aligned{
-        nullptr};        ///< prepare(): set the bits (size nv) of coordinates whose q was set to measured.
+        nullptr};        ///< Estimated robot configuration (size nq); nullptr if unknown.
     bool rebase{false};  ///< reset() after resynchronize(true): drop held targets, hold where the robot is.
     /// Effective position limits (size nq): model limits narrowed by the solver options; +-inf where unbounded.
     const Eigen::VectorXd* lower_limit{nullptr};
@@ -389,9 +387,6 @@ class KSTONE_EXPORT ModuleSet {
     /// granted claim holder, else the latest to request_control() there. Joints nobody controls, or
     /// controlled by a non-homeable module (e.g. gaze), are left alone. Returns the first error.
     Status home_all();
-    /// Coordinates (size nv) set to measured by the last step()'s prepare().
-    const Mask& aligned() const noexcept;
-
     /// Null if not found.
     std::shared_ptr<Module> module(const std::string& id) const;
     /// Step order after configure(), add order before.

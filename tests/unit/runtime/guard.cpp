@@ -79,7 +79,11 @@ class Probe final : public Module {
 class RecordingRobot final : public RobotInterface {
   public:
     RecordingRobot(Eigen::VectorXd q, Eigen::Index nv) : inner_(std::move(q), nv) {}
-    Status read(RobotState& state) override { return inner_.read(state); }
+    Status read(RobotState& state) override {
+        Status s = inner_.read(state);
+        if (s && bias_index >= 0) state.q[bias_index] += bias;
+        return s;
+    }
     Status write(const RobotCommand& command) override {
         ++writes;
         last = command;
@@ -87,6 +91,8 @@ class RecordingRobot final : public RobotInterface {
     }
     int writes{0};
     RobotCommand last;
+    Eigen::Index bias_index{-1};  ///< Feedback offset on one q coordinate (a tracking error).
+    double bias{0.0};
 
   private:
     LoopbackRobot inner_;
@@ -222,6 +228,25 @@ TEST_CASE("guard: a joint measured outside its range may move back") {
     CHECK(f.robot->last.q[f.iq("j1")] < 2.05);
     CHECK(2.05 - f.robot->last.q[f.iq("j1")] <= 1.5 * kDt);
     CHECK(f.engine.stats().guard_rejects == 0);
+}
+
+TEST_CASE("guard: outside synchronization the measured state does not widen the position range") {
+    Fixture f = make({}, 0.0, 1.99);
+    f.target_j1(1.99);
+    for (int k = 1; k <= 5; ++k) REQUIRE(f.engine.step(k * kDt));
+    REQUIRE(f.engine.attached());
+    // The robot lags outside the range; the ideal state is still inside.
+    f.robot->bias_index = f.iq("j1");
+    f.robot->bias = 0.06;
+    REQUIRE(f.engine.step(6 * kDt));
+    REQUIRE(f.engine.measured());
+    CHECK((*f.engine.measured())[f.iq("j1")] > 2.0);
+    f.target_j1(2.003);
+    f.probe->write_index = f.iq("j1");
+    f.probe->write_value = 2.003;
+    Status s = f.engine.step(7 * kDt);
+    REQUIRE_FALSE(s);
+    CHECK(contains(s.error().message, "engine guard: joint j1 position"));
 }
 
 TEST_CASE("guard: rejected independent-group command cannot advance synchronization trajectory") {

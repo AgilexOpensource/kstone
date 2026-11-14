@@ -79,18 +79,6 @@ Claim Homing::claim(const Mask& joints) const noexcept {
     return {&joints, priority::preemptive, OnHeld::wait, true};
 }
 
-void Homing::align(Cycle& cycle, const Model& model, const Mask& joints) noexcept {
-    if (!align_pending_) return;
-    align_pending_ = false;
-    if (!cycle.measured || !cycle.aligned) return;
-    for (const JointInfo& j : model.joints()) {
-        // Scalar joints only: one velocity coordinate (revolute, prismatic, continuous).
-        if (j.id == 0 || j.nv != 1 || !joints.test(static_cast<std::size_t>(j.idx_v))) continue;
-        cycle.q.segment(j.idx_q, j.nq) = cycle.measured->segment(j.idx_q, j.nq);
-        cycle.aligned->set(static_cast<std::size_t>(j.idx_v));
-    }
-}
-
 bool Homing::start() noexcept {
     if (status_ != HomeStatus::waiting) return false;
     status_ = HomeStatus::executing;

@@ -141,6 +141,7 @@ Status FrameTargetModule::apply_target(const Eigen::Isometry3d& target) {
         return make_error(ErrorCode::invalid_argument, "frame_target '" + id() + "': homing in progress");
     target_ = target;
     has_target_ = true;
+    hold_observed_ = false;
     request_control();
     return {};
 }
@@ -211,7 +212,11 @@ ConfigNode FrameTargetModule::tune_schema() const {
 Status FrameTargetModule::finish(HomeStatus status) {
     home_.finish(status);
     if (Status s = trajectory_->tune(config_.trajectory); !s) return s;
-    if (status != HomeStatus::succeeded && trajectory_->initialized()) target_ = trajectory_->ramp_pose();
+    // Timed out: contribute() moves target and ramp to the ideal pose it reached; aborted stops on the ramp.
+    if (status == HomeStatus::timed_out)
+        hold_observed_ = true;
+    else if (status != HomeStatus::succeeded && trajectory_->initialized())
+        target_ = trajectory_->ramp_pose();
     has_target_ = true;
     return {};
 }
@@ -225,7 +230,6 @@ Status FrameTargetModule::prepare(Cycle& cycle) {
         Eigen::Isometry3d observed;
         if (observe(cycle.workspace, observed).ok()) target_ = observed;
     }
-    home_.align(cycle, *model_, driven_);
     return {};
 }
 
@@ -404,7 +408,8 @@ Status FrameTargetModule::reset(const Cycle& cycle) {
     Eigen::Isometry3d observed;
     if (Status s = observe(cycle.workspace, observed); !s) return s;
     if (cycle.rebase) has_target_ = false;
-    if (!has_target_) target_ = observed;
+    if (!has_target_ || hold_observed_) target_ = observed;
+    hold_observed_ = false;
     if (Status s = trajectory_->reset(observed); !s) return s;
     return task_->set_target(observed);
 }
@@ -417,6 +422,11 @@ Status FrameTargetModule::contribute(const Cycle& cycle) {
         Result<Eigen::Isometry3d> root = model_->root_pose(cycle.q);
         if (!root) return std::move(root).error();
         home = *root * home_pose_;
+    }
+    if (hold_observed_) {
+        hold_observed_ = false;
+        target_ = observed;
+        if (Status s = trajectory_->reset(observed); !s) return s;
     }
     if (home_.start()) {
         // Restart the ramp from the observed pose: a stale ramp left by an unreachable target bends the home path.
@@ -506,8 +516,8 @@ Status JointTargetModule::configure(ModuleSetup& setup) {
     target_.resize(n);
     for (std::size_t i = 0; i < joints_.size(); ++i)
         target_[static_cast<Index>(i)] = scalar_position(joints_[i], setup.initial());
-    measured_.setZero(n);
-    measured_v_.setZero(n);
+    ideal_.setZero(n);
+    ideal_v_.setZero(n);
     partial_.setZero(n);
     seen_.assign(joints_.size(), false);
     fill_.assign(joints_.size(), false);
@@ -691,7 +701,11 @@ ConfigNode JointTargetModule::tune_schema() const {
 
 Status JointTargetModule::finish(HomeStatus status) {
     home_.finish(status);
-    if (status != HomeStatus::succeeded) target_ = trajectory_->reference();
+    // Timed out: hold the ideal joints it reached (e.g. blocked by collision or unreachable), not home.
+    if (status == HomeStatus::timed_out)
+        target_ = ideal_;
+    else if (status != HomeStatus::succeeded)
+        target_ = trajectory_->reference();
     if (Status s = trajectory_->configure(config_.trajectory); !s) return s;
     has_target_ = true;
     // A finished home keeps the joints until other input takes them; an aborted one lets go.
@@ -700,19 +714,19 @@ Status JointTargetModule::finish(HomeStatus status) {
     return {};
 }
 
-void JointTargetModule::measure(const Cycle& cycle) {
+void JointTargetModule::read_ideal(const Cycle& cycle) {
     for (std::size_t i = 0; i < joints_.size(); ++i) {
         const JointInfo& j = joints_[i];
         const auto k = static_cast<Index>(i);
-        measured_[k] = scalar_position(j, cycle.q);
-        measured_v_[k] = cycle.v[j.idx_v];
+        ideal_[k] = scalar_position(j, cycle.q);
+        ideal_v_[k] = cycle.v[j.idx_v];
     }
 }
 
 bool JointTargetModule::arrived(const Eigen::VectorXd& goal) const {
     for (std::size_t i = 0; i < joints_.size(); ++i) {
         const auto k = static_cast<Index>(i);
-        double e = goal[k] - measured_[k];
+        double e = goal[k] - ideal_[k];
         if (wrap_[i]) e = std::remainder(e, 2.0 * M_PI);
         if (std::abs(e) >= config_.position_tolerance) return false;
     }
@@ -737,21 +751,23 @@ Status JointTargetModule::prepare(Cycle& cycle) {
     }
     // Held with nothing pending: the port follows the joints, matching what reset() resumes from.
     if (!running() && !home_.active() && (!has_target_ || (config_.on_idle == OnIdle::claim && !claiming_))) {
-        measure(cycle);
-        target_ = measured_;
+        read_ideal(cycle);
+        target_ = ideal_;
     }
-    home_.align(cycle, *model_, mask_);
     return {};
 }
 
 Status JointTargetModule::step_home(const Cycle& cycle) {
-    if (home_.update(cycle)) return finish(home_.status());
+    if (home_.update(cycle)) {
+        read_ideal(cycle);
+        return finish(home_.status());
+    }
     if (home_.status() == HomeStatus::executing) {
-        measure(cycle);
+        read_ideal(cycle);
         double error = 0.0;
         for (std::size_t i = 0; i < joints_.size(); ++i) {
             const auto k = static_cast<Index>(i);
-            double e = home_pose_[k] - measured_[k];
+            double e = home_pose_[k] - ideal_[k];
             if (wrap_[i]) e = std::remainder(e, 2.0 * M_PI);
             error = std::max(error, std::abs(e));
         }
@@ -763,7 +779,7 @@ Status JointTargetModule::step_home(const Cycle& cycle) {
     }
     // A continuous profile never goes inactive; it is at rest once its velocity is zero.
     if (!claiming_ || settled_ || (trajectory_->active() && !trajectory_->velocity().isZero(1e-9))) return {};
-    measure(cycle);
+    read_ideal(cycle);
     settled_ = arrived(target_);
     // on_idle claim keeps the joints anyway; idle again, it resumes from where they are.
     if (settled_ && config_.on_idle == OnIdle::claim) claiming_ = false;
@@ -798,28 +814,28 @@ Status JointTargetModule::on_disabled(const Cycle&) {
 Status JointTargetModule::on_preempted(const Cycle&, const std::string&) {
     if (home_.active())
         if (Status s = finish(HomeStatus::aborted); !s) return s;
-    // Idle: the next reset() holds the positions measured then.
+    // Idle: the next reset() holds the positions it finds then.
     claiming_ = false;
     has_target_ = false;
     return {};
 }
 
 Status JointTargetModule::reset(const Cycle& cycle) {
-    measure(cycle);
+    read_ideal(cycle);
     // on_idle claim resumes idle from where the joints are.
     if (cycle.rebase) has_target_ = false;
     if (!has_target_ || (config_.on_idle == OnIdle::claim && !claiming_))
-        target_ = measured_;
+        target_ = ideal_;
     else if (filling_)
         for (std::size_t i = 0; i < fill_.size(); ++i)
-            if (fill_[i]) target_[static_cast<Index>(i)] = measured_[static_cast<Index>(i)];
+            if (fill_[i]) target_[static_cast<Index>(i)] = ideal_[static_cast<Index>(i)];
     filling_ = false;
     trajectory_->reset();
-    return task_->set_target(measured_);
+    return task_->set_target(ideal_);
 }
 
 Status JointTargetModule::contribute(const Cycle& cycle) {
-    measure(cycle);
+    read_ideal(cycle);
     if (home_.start()) {
         if (Status s = trajectory_->configure(home_trajectory_); !s) return s;
         target_ = home_pose_;
@@ -828,11 +844,11 @@ Status JointTargetModule::contribute(const Cycle& cycle) {
     const bool active = (config_.on_idle != OnIdle::release && !yielded_) || holds_claim() || home_.active();
     set_task_active(handle_, active);
     if (!active) {
-        target_ = measured_;
+        target_ = ideal_;
         trajectory_->reset();
-        return task_->set_target(measured_);
+        return task_->set_target(ideal_);
     }
-    if (Status s = trajectory_->step(measured_, target_, measured_v_, limit_, cycle.dt); !s) return s;
+    if (Status s = trajectory_->step(ideal_, target_, ideal_v_, limit_, cycle.dt); !s) return s;
     return task_->set_target(trajectory_->reference());
 }
 

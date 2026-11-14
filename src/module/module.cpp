@@ -282,7 +282,7 @@ struct ModuleSet::Impl {
     std::vector<std::shared_ptr<Module>> modules;
     std::vector<Entry> entries;
     std::vector<std::size_t> claimants;
-    Mask granted, aligned;
+    Mask granted;
     Eigen::VectorXd q, v, initial;
     std::optional<double> feedback_timeout_s;
     Eigen::VectorXd lower_limit, upper_limit;  // effective, see Cycle
@@ -356,7 +356,6 @@ Result<ModuleSet> ModuleSet::create(ModelPtr model, SolverOptions options, const
     impl->solver_defaults = impl->solver.options();
     const auto nv = static_cast<std::size_t>(model->nv());
     impl->granted = Mask(nv);
-    impl->aligned = Mask(nv);
     impl->resync_dofs = Mask(nv);
     impl->synchronization_hold = Mask(nv);
     impl->rebase_dofs = Mask(nv);
@@ -582,7 +581,6 @@ Status ModuleSet::step(const Eigen::Ref<const Eigen::VectorXd>& q, const Eigen::
     s.rebase = false;
     s.resync_dofs.set_range(0, s.resync_dofs.size(), false);
     s.rebase_dofs.set_range(0, s.rebase_dofs.size(), false);
-    s.aligned.set_range(0, s.aligned.size(), false);
     s.sync_limits();
     Cycle cycle{now,
                 dt,
@@ -591,7 +589,6 @@ Status ModuleSet::step(const Eigen::Ref<const Eigen::VectorXd>& q, const Eigen::
                 s.v,
                 s.workspace,
                 measured,
-                &s.aligned,
                 false,
                 &s.lower_limit,
                 &s.upper_limit,
@@ -686,8 +683,6 @@ void ModuleSet::resynchronize(bool rebase, const Mask& dofs) {
     s.resync_dofs |= dofs;
     if (rebase) s.rebase_dofs |= dofs;
 }
-
-const Mask& ModuleSet::aligned() const noexcept { return impl_->aligned; }
 
 std::shared_ptr<Module> ModuleSet::module(const std::string& id) const {
     for (const auto& m : impl_->modules)

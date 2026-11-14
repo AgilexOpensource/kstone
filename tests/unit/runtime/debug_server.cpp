@@ -934,6 +934,34 @@ TEST_CASE("debug server: module visuals and display outputs") {
     fs::remove_all(dir);
 }
 
+TEST_CASE("debug server: a centre of mass display follows its closed_loop switch") {
+    auto doc = parse_yaml("model: {file: " + (kFixtures / "arm.urdf").string() +
+                              "}\nrate_hz: 100\nfeedback_timeout_s: 0\nrobot: {type: loopback}\nmodules:\n"
+                              "  com_open: {type: center_of_mass, frame: base_link,"
+                              " polygon: [[1, 1], [-1, 1], [-1, -1], [1, -1]]}\n"
+                              "  com_closed: {type: center_of_mass, frame: base_link,"
+                              " polygon: [[1, 1], [-1, 1], [-1, -1], [1, -1]], closed_loop: true}\n",
+                          "inline");
+    REQUIRE(doc);
+    auto e = build_engine(*doc, kFixtures);
+    REQUIRE_MESSAGE(e, (e ? std::string{} : e.error().message));
+    DebugServerOptions options;
+    options.port = 0;
+    auto server = DebugServer::start(*e, options);
+    REQUIRE(server);
+    Client client((*server)->port());
+    client.read_type("model");
+    REQUIRE(e->step(0.0));
+    REQUIRE(e->measured());
+    const ConfigNode st = client.read_type("state");
+    const ConfigNode* open = module_node(st, "com_open")->find("display");
+    const ConfigNode* closed = module_node(st, "com_closed")->find("display");
+    REQUIRE((open && open->kind() == ConfigNode::Kind::map));
+    REQUIRE((closed && closed->kind() == ConfigNode::Kind::map));
+    CHECK(open->find("at")->as_string() == "command");
+    CHECK(closed->find("at")->as_string() == "measured");
+}
+
 TEST_CASE("debug server: resync op validates its fields and reports group deviation") {
     auto e = load_engine(kFixtures / "arm_loopback.yaml");
     REQUIRE(e);

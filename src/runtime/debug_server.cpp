@@ -1,6 +1,7 @@
 #include "kstone/runtime/debug_server.hpp"
 
 #include "kstone/model/workspace.hpp"
+#include "kstone/module/builtins.hpp"
 #include "kstone/module/config.hpp"
 #include "kstone/module/yaml.hpp"
 
@@ -393,8 +394,9 @@ struct DebugServer::Impl {
     std::vector<std::vector<std::optional<FrameId>>> visual_frames;
     std::vector<std::size_t> visual_counts;
     // Control thread: display workspace and the last recomputed displays, copied into every snapshot.
-    std::optional<Workspace> display;
+    std::optional<Workspace> display, command_display;
     std::vector<ModuleDisplay> displays;
+    std::vector<const CenterOfMassModule*> coms;  ///< Per module; the CoM shows the command when open loop.
     SteadyClock::time_point next_display{};
     // IO thread: last "params" message per module, replayed after "model" since the model's params are start values.
     std::vector<std::string> latest_params;
@@ -479,19 +481,32 @@ struct DebugServer::Impl {
                 }
             }
         display.emplace(engine.modules().model());
+        command_display.emplace(engine.modules().model());
+        coms.assign(mods.size(), nullptr);
+        for (std::size_t m = 0; m < mods.size(); ++m)
+            coms[m] = dynamic_cast<const CenterOfMassModule*>(mods[m].get());
     }
 
     // Recomputes module displays at the measured state when fresh, else at the command (what clients draw).
+    // A centre of mass follows its closed_loop switch: open loop it shows the command even with feedback.
     void update_displays(const Engine& engine) {
         const Eigen::VectorXd* measured = engine.measured();
         const bool ok = display->update(measured ? *measured : engine.command().q).ok();
+        bool command_ok = false, command_updated = false;
         const auto& mods = engine.modules().modules();
         Eigen::Isometry3d placement;
         for (std::size_t m = 0; m < mods.size(); ++m) {
             ModuleDisplay& d = displays[m];
             if (outputs[m].empty() && visual_counts[m] == 0) continue;
-            d.measured = measured != nullptr;
-            d.valid = ok && mods[m]->update_outputs(*display).ok();
+            const bool at_command =
+                measured && coms[m] && coms[m]->constraint() && !coms[m]->constraint()->closed_loop();
+            if (at_command && !command_updated) {
+                command_ok = command_display->update(engine.command().q).ok();
+                command_updated = true;
+            }
+            Workspace& ws = at_command ? *command_display : *display;
+            d.measured = measured != nullptr && !at_command;
+            d.valid = (at_command ? command_ok : ok) && mods[m]->update_outputs(ws).ok();
             for (std::size_t o = 0; d.valid && o < d.outputs.size(); ++o)
                 d.valid = mods[m]->read_output(o, d.outputs[o]).ok();
             for (std::size_t v = 0; d.valid && v < d.poses.size(); ++v) {
@@ -500,7 +515,7 @@ struct DebugServer::Impl {
                     d.poses[v] = placement;
                     continue;
                 }
-                d.valid = display->frame_pose(*visual_frames[m][v], d.poses[v]).ok();
+                d.valid = ws.frame_pose(*visual_frames[m][v], d.poses[v]).ok();
                 d.poses[v] = d.poses[v] * placement;
             }
         }

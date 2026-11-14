@@ -718,7 +718,8 @@ struct Engine::Impl {
             const double q = command.q[p.iq];
             double lower = std::min(p.lower, ideal_q[p.iq]);
             double upper = std::max(p.upper, ideal_q[p.iq]);
-            if (has_measured) {
+            // The measured state widens the range only while a synchronization moves the joint back inside.
+            if (has_measured && synchronization_mask.test(static_cast<std::size_t>(p.iv))) {
                 lower = std::min(lower, measured_q[p.iq]);
                 upper = std::max(upper, measured_q[p.iq]);
             }
@@ -946,9 +947,6 @@ Status Engine::step_impl(double now) {
                                     now - d.held_time, d.dt, d.result);
             !s)
             return fail(std::move(s));
-        const Mask& aligned = d.modules.aligned();
-        for (Index i = 0; i < d.err.size(); ++i)
-            if (aligned.test(static_cast<std::size_t>(i))) d.err[i] = 0.0;
         for (Impl::Group& g : d.groups) {
             if (!g.transition) continue;
             if (g.first_command) {

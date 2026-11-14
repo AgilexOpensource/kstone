@@ -24,8 +24,9 @@ enum class GuardMode {
 
 /// Last check of every command before RobotInterface::write, against the Model limits (not solver overrides).
 /// Velocity: every dof whose model limit is finite and > 0 (URDFs without one load as 0 = no limit).
-/// Position: scalar joints (nq == nv == 1) with Model::has_position_limit; a joint whose commanded (or measured)
-/// start is outside its range may hold or move back but not further out. Quaternion and (cos, sin) coordinates are only velocity-checked.
+/// Position: scalar joints (nq == nv == 1) with Model::has_position_limit; a joint whose commanded start (or,
+/// while a synchronization moves it back inside, measured state) is outside its range may hold or move back but
+/// not further out. Quaternion and (cos, sin) coordinates are only velocity-checked.
 struct CommandGuardOptions {
     GuardMode mode{GuardMode::reject};
     double velocity_scale{1.0};  ///< > 0; multiplies every model velocity limit.
