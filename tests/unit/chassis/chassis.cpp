@@ -8,7 +8,9 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cmath>
+#include <deque>
 #include <filesystem>
 #include <limits>
 #include <memory>
@@ -45,8 +47,12 @@ TEST_CASE("chassis: velocity mode limits and lease timeout") {
     auto ctrl = started(config, 0.01);
     CHECK(accepted(ctrl.submit_velocity({1.0, 1.0, 2.0}, 0.0)));
     auto out = ctrl.step(0.01);
-    CHECK(std::abs(out.velocity.vx - 0.0075) < 1e-12);
+    // Clamped to the velocity limits only; the base ramps the step itself.
+    CHECK(out.velocity.vx == doctest::Approx(config.max_linear_velocity));
     CHECK(out.velocity.vy == 0.0);
+    CHECK(out.velocity.wz == doctest::Approx(config.max_angular_velocity));
+    REQUIRE(ctrl.submit_velocity({0.0, 0.0, 0.0}, 0.01));
+    CHECK(ctrl.step(0.02).velocity.vx == 0.0);
     double now = 0.01;
     for (int i = 0; i < 100; ++i) {
         now += 0.01;
@@ -154,6 +160,147 @@ TEST_CASE("chassis: omni pose mode is bounded and reaches the goal") {
         CHECK(std::abs(wrap_angle(pose.yaw - goal.yaw)) < 1e-6);
         CHECK(std::abs(previous.vx) < 1e-9);
         CHECK(std::abs(previous.wz) < 1e-9);
+    }
+}
+
+namespace {
+// Omni base that applies each command after `delay` and ramps at `accel`; odometry is stamped on receipt.
+double settle_oscillation(double latency, double delay = 0.2, double accel = 0.6) {
+    ChassisConfig config;
+    config.max_linear_velocity = 0.5;
+    config.max_linear_acceleration = config.max_linear_deceleration = 2.5;
+    config.position_tolerance = 0.001;
+    config.odom_latency_s = latency;
+    const double dt = 0.02;
+    auto ctrl = started(config, dt);
+    std::deque<double> pipe(static_cast<std::size_t>(std::lround(delay / dt)), 0.0);
+    double x = 0.0, v = 0.0, now = 0.0, lo = 1e9, hi = -1e9;
+    for (int i = 0; i < 600; ++i) {
+        REQUIRE(accepted(ctrl.submit_odometry({x, 0, 0}, now, now)));
+        REQUIRE(ctrl.submit_pose({0.05, 0, 0}, now));
+        now += dt;
+        const auto out = ctrl.step(now);
+        REQUIRE(out.reason == ChassisReason::tracking);
+        pipe.push_back(out.velocity.vx);
+        const double u = pipe.front();
+        pipe.pop_front();
+        v += std::clamp(u - v, -accel * dt, accel * dt);
+        x += v * dt;
+        if (i >= 400) lo = std::min(lo, x), hi = std::max(hi, x);
+    }
+    return hi - lo;
+}
+}  // namespace
+
+TEST_CASE("chassis: odometry latency compensation stops a delayed base from oscillating") {
+    CHECK(settle_oscillation(0.0) > 0.05);  // uncompensated: sustained back-and-forth
+    CHECK(settle_oscillation(0.2) < 0.005);
+    for (double delay : {0.14, 0.2, 0.26})  // robust to a misestimated delay and a slower base
+        for (double accel : {0.5, 0.8}) {
+            INFO("delay=" << delay << " accel=" << accel);
+            CHECK(settle_oscillation(0.2, delay, accel) < 0.01);
+        }
+    ChassisConfig config;
+    config.odom_latency_s = -0.1;
+    CHECK_FALSE(ChassisController::create(config));
+}
+
+TEST_CASE("chassis: a solve pause is replayed as zero output, not as the last motion") {
+    ChassisConfig config;
+    config.max_linear_velocity = 0.5;
+    config.max_linear_acceleration = config.max_linear_deceleration = 2.5;
+    config.odom_latency_s = 0.2;
+    const double dt = 0.02;
+    const Pose2D near{0.05, 0, 0};  // closer than v * latency: replaying the cruise speed would overshoot it
+    auto plan_from_rest = [&](auto& ctrl, double& now) {
+        REQUIRE(accepted(ctrl.submit_odometry({0, 0, 0}, now, now)));
+        REQUIRE(ctrl.submit_pose(near, now));
+        now += dt;
+        return ctrl.step(now).velocity.vx;
+    };
+    auto fresh = started(config, dt);
+    double now = dt;
+    fresh.step(now);  // applies the scheduler period
+    const double expected = plan_from_rest(fresh, now);
+    REQUIRE(expected > 0.0);
+
+    auto ctrl = started(config, dt);
+    now = 0.0;
+    for (int i = 0; i < 50; ++i) {  // 1 s toward a far goal: full speed
+        REQUIRE(accepted(ctrl.submit_odometry({0, 0, 0}, now, now)));
+        REQUIRE(ctrl.submit_pose({5.0, 0, 0}, now));
+        now += dt;
+        ctrl.step(now);
+    }
+    REQUIRE(ctrl.snapshot(now).velocity.vx > 0.3);  // per world axis 0.5 / sqrt(2)
+    for (int i = 0; i < 15; ++i) {                  // 0.3 s solve pause, longer than the latency
+        REQUIRE(accepted(ctrl.submit_odometry({0, 0, 0}, now, now)));
+        now += dt;
+        ctrl.service(now, false);
+    }
+    CHECK(plan_from_rest(ctrl, now) == doctest::Approx(expected));
+}
+
+TEST_CASE("chassis: lateral limits bound body y separately in velocity mode") {
+    ChassisConfig config;
+    config.max_linear_velocity = 1.0;
+    config.max_linear_acceleration = 0.8;
+    config.max_lateral_velocity = 0.5;
+    config.max_lateral_acceleration = 0.4;
+    auto ctrl = started(config, 0.01);
+    double now = 0.0;
+    REQUIRE(accepted(ctrl.submit_velocity({0, 2.0, 0}, now)));
+    now += 0.01;
+    CHECK(ctrl.step(now).velocity.vy == doctest::Approx(0.5));
+    REQUIRE(ctrl.submit_velocity({2.0, 2.0, 0}, now));
+    now += 0.01;
+    const Twist2D out = ctrl.step(now).velocity;
+    CHECK(std::hypot(out.vx / 1.0, out.vy / 0.5) == doctest::Approx(1.0));
+    CHECK(out.vx == doctest::Approx(out.vy));  // direction kept
+    config.max_lateral_acceleration = -1.0;
+    CHECK_FALSE(ChassisController::create(config));
+}
+
+TEST_CASE("chassis: omni pose mode keeps body x and y within their own limits at any heading") {
+    ChassisConfig config;
+    config.max_linear_velocity = 1.0;
+    config.max_linear_acceleration = config.max_linear_deceleration = 0.8;
+    config.max_lateral_velocity = 0.5;
+    config.max_lateral_acceleration = config.max_lateral_deceleration = 0.45;
+    config.max_angular_velocity = 1.0;
+    for (double yaw : {0.0, 0.5, 1.2, kPi / 2, 2.5, -2.0}) {
+        INFO("yaw=" << yaw);
+        const double dt = 0.02;
+        auto created = ChassisController::create(config);
+        REQUIRE(created);
+        auto& ctrl = *created;
+        REQUIRE(ctrl.set_scheduler_period(dt));
+        REQUIRE(ctrl.start(0.0, Pose2D{0, 0, yaw}));
+        const Pose2D goal{1.2, -0.7, yaw + 0.6};
+        double now = 0.0;
+        Twist2D previous;
+        double peak_vy = 0.0;
+        for (int i = 0; i < 600; ++i) {
+            REQUIRE(ctrl.submit_pose(goal, now));
+            now += dt;
+            const auto out = ctrl.step(now);
+            INFO("cycle=" << i << " error=" << ctrl.last_error());
+            REQUIRE(out.reason == ChassisReason::tracking);
+            const Twist2D& v = out.velocity;
+            // Bounds are set at the cycle's start heading; the yaw turned within one cycle adds a little.
+            REQUIRE(std::hypot(v.vx / 1.0, v.vy / 0.5) <= 1.0 + std::abs(v.wz) * dt + 1e-6);
+            // Rotation also turns the body-frame velocity; allow its contribution on top of the planned rate.
+            const double turn = std::abs(v.wz) * std::hypot(v.vx, v.vy) * dt;
+            REQUIRE(std::abs(v.vx - previous.vx) <= 0.8 * dt * 1.05 + turn + 1e-9);
+            REQUIRE(std::abs(v.vy - previous.vy) <= 0.45 * dt * 1.05 + turn + 1e-9);
+            peak_vy = std::max(peak_vy, std::abs(v.vy));
+            previous = v;
+        }
+        const Pose2D pose = ctrl.pose();
+        CHECK(std::abs(pose.x - goal.x) < 1e-6);
+        CHECK(std::abs(pose.y - goal.y) < 1e-6);
+        CHECK(std::abs(wrap_angle(pose.yaw - goal.yaw)) < 1e-6);
+        CHECK(peak_vy > 0.1);
     }
 }
 

@@ -19,8 +19,10 @@
 
 - `kinematics`：`omni` 或 `differential`。不可调，可从 `Module.properties` 读取。
 - `base_frame`：控制中心所在 frame，默认 `base_link`。
-- `max_linear_velocity`、`max_angular_velocity` 及对应的 `*_acceleration`、`*_deceleration`、`*_reversal_deceleration`、`*_jerk`：上限。速度模式直接用这些值，位姿模式的初始限制也取它们。
+- `max_linear_velocity`、`max_angular_velocity` 及对应的 `*_acceleration`、`*_deceleration`：上限。速度方向与剩余位移相反时按减速度上限刹车。不限 jerk，加速度的平滑由底盘固件完成。速度模式只把指令限在速度上限内（加减速由底盘自己完成）；位姿模式的初始限制取全部这些值。
+- `max_lateral_velocity`、`max_lateral_acceleration`、`max_lateral_deceleration`（默认 0，即取对应的 `max_linear_*`）：全向底盘车体 y 方向的上限，用于侧移比前后弱的底盘。此时 `max_linear_*` 只管车体 x，平移限制在椭圆 $(v_x/x_{max})^2 + (v_y/y_{max})^2 \le 1$ 内（两者相等时就是平面合速度）。
 - `position_tolerance`、`orientation_tolerance`：到达判定，默认 0.01 m、0.02 rad。
+- `odom_latency_s`（默认 0，关闭）：只用于全向底盘位姿模式，表示底盘的响应延迟。里程计只反映其时间戳之前这么久以前发出的输出，所以规划前把之后发出的输出叠加到里程计上。不设置时，指令生效较慢的底盘会冲过目标，在目标附近来回运动。可用一次速度阶跃（指令到里程计）测得。
 - `target_position_deadband`、`target_orientation_deadband`：差速底盘下，目标变化小于这个量时沿用当前路径。
 - `command_timeout_s`（默认 0.25）：指令超过这么久没更新就清除运动，reason 为 `command_timeout`，不算 fault。
 - 里程计超时：取引擎的 `feedback_timeout_s`（0 = 里程计永不过期）。比这更旧的里程计被拒收。最近一次里程计未过期时位姿保持该值，过期后用输出速度推算位姿。
@@ -31,7 +33,7 @@
 
 ### pose_limits（只能 tune）
 
-位姿模式的运行时限制：`max_linear_velocity`、`max_linear_acceleration`、`max_linear_deceleration`、`max_linear_reversal_deceleration`、`max_linear_jerk` 及对应的 `max_angular_*` 字段，0 = 不限；全为 0 时直接输出未整形的速度。`planner_mode`：
+位姿模式的运行时限制：`max_linear_velocity`、`max_linear_acceleration`、`max_linear_deceleration`、`max_lateral_*`（0 = 取对应的 linear 值）及对应的 `max_angular_*` 字段，0 = 不限；全为 0 时直接输出未整形的速度。`planner_mode`：
 
 - `axis_phase`（默认）：全向底盘 x/y/yaw 相位同步，不能同步时退回时间同步。
 - `axis_time`：全向底盘时间同步。
@@ -74,7 +76,7 @@ ch.tune({"pose_limits": {"max_linear_velocity": 0.3, "planner_mode": "axis_time"
 ## 常见坑
 
 - 速度指令是租约，停止写入后 `command_timeout_s` 内底盘停下。遥控要按固定频率持续写。
-- `pose_limits` 只影响位姿模式，速度模式始终用 `chassis` 里的 `max_*`。tune 时不检查是否超过这些上限，要自己保证不超过底盘能力。
+- `pose_limits` 只影响位姿模式，速度模式始终用 `chassis` 里的 `max_*_velocity`。tune 时不检查是否超过这些上限，要自己保证不超过底盘能力。
 - `straight` 只能配 `differential`，`axis_*` 只能配 `omni`，其他组合会被拒。
 - 里程计时间戳比当前时间早引擎 `feedback_timeout_s` 以上会被拒收，不报错，位姿只靠推算。实机要检查里程计和控制器时钟是否一致。
 - 调试时暂停进程或单步过久会触发 `scheduler_discontinuity` fault，底盘停住，把模块禁用再启用即可恢复。

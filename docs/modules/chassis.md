@@ -19,8 +19,10 @@ Config lives in the `chassis:` sub-object:
 
 - `kinematics`: `omni` or `differential`. Not tunable; read it from `Module.properties`.
 - `base_frame`: frame of the control centre, default `base_link`.
-- `max_linear_velocity`, `max_angular_velocity` and the matching `*_acceleration`, `*_deceleration`, `*_reversal_deceleration`, `*_jerk`: limits. Velocity mode uses them directly, and they seed the initial pose-mode limits.
+- `max_linear_velocity`, `max_angular_velocity` and the matching `*_acceleration`, `*_deceleration`: limits. A velocity moving against the remaining displacement brakes at the deceleration limit. There is no jerk limit: the base firmware smooths its own acceleration. Velocity mode only clamps the command to the velocity limits (the base ramps it); all of them seed the initial pose-mode limits.
+- `max_lateral_velocity`, `max_lateral_acceleration`, `max_lateral_deceleration` (default 0 = the matching `max_linear_*`): omni body-y limits for a base whose sideways motion is weaker than forward motion. `max_linear_*` then covers body x, and translation stays inside the ellipse $(v_x/x_{max})^2 + (v_y/y_{max})^2 \le 1$ (the planar norm when both are equal).
 - `position_tolerance`, `orientation_tolerance`: arrival check, default 0.01 m and 0.02 rad.
+- `odom_latency_s` (default 0 = off): omni pose mode only. The base's response delay: odometry reflects only the outputs sent up to this long before its stamp, so the outputs sent since then are replayed onto it before planning. Without it, a base whose commands take effect late overshoots and keeps moving back and forth around the goal. Measure it from a velocity step (command to odometry).
 - `target_position_deadband`, `target_orientation_deadband`: differential only; target changes below these keep the current path.
 - `command_timeout_s` (default 0.25): a command not refreshed for this long clears motion with reason `command_timeout`. This is not a fault.
 - Odometry timeout: the engine `feedback_timeout_s` (0 = odometry never goes stale). Odometry older than this is rejected. While the last odometry is fresh the pose holds it; once it expires the pose is dead-reckoned from the output velocity.
@@ -31,7 +33,7 @@ Top level: `center_in_root` (fixed pose of the control centre in the root frame)
 
 ### pose_limits (tune only)
 
-Runtime limits for pose mode: `max_linear_velocity`, `max_linear_acceleration`, `max_linear_deceleration`, `max_linear_reversal_deceleration`, `max_linear_jerk` and the matching `max_angular_*` fields; 0 = unbounded. When all are 0 the unshaped velocity is output directly. `planner_mode`:
+Runtime limits for pose mode: `max_linear_velocity`, `max_linear_acceleration`, `max_linear_deceleration`, the `max_lateral_*` fields (0 = the matching linear bound) and the matching `max_angular_*` fields; 0 = unbounded. When all are 0 the unshaped velocity is output directly. `planner_mode`:
 
 - `axis_phase` (default): omni, x/y/yaw phase-synchronised, falling back to time sync.
 - `axis_time`: omni, time-synchronised.
@@ -74,7 +76,7 @@ ch.tune({"pose_limits": {"max_linear_velocity": 0.3, "planner_mode": "axis_time"
 ## Pitfalls
 
 - A velocity command is a lease: once writes stop, the base stops within `command_timeout_s`. Teleoperation must write at a fixed rate.
-- `pose_limits` affects pose mode only; velocity mode always uses the `max_*` values in `chassis`. A tune does not check them against those maxima, so keep them within what the base can do.
+- `pose_limits` affects pose mode only; velocity mode always uses the `max_*_velocity` values in `chassis`. A tune does not check them against those maxima, so keep them within what the base can do.
 - `straight` only goes with `differential`, `axis_*` only with `omni`. Other pairs are rejected.
 - Odometry stamped more than the engine `feedback_timeout_s` before now is rejected silently and the pose relies on dead reckoning alone. On hardware, check that the odometry and controller clocks agree.
 - Pausing the process in a debugger or stepping too slowly triggers a `scheduler_discontinuity` fault and the base stops. Disable and re-enable the module to recover.

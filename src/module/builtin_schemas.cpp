@@ -425,6 +425,9 @@ ParamSchema<ChassisConfig> chassis_config() {
             {{"omni", ChassisKinematics::omni}, {"differential", ChassisKinematics::differential}});
     s.field("target_position_deadband", &C::target_position_deadband).at_least(0);
     s.field("target_orientation_deadband", &C::target_orientation_deadband).at_least(0);
+    s.field("odom_latency_s", &C::odom_latency_s)
+        .at_least(0)
+        .doc("Omni pose mode: base response delay compensated on the odometry (0 = off).");
     s.field("command_timeout_s", &C::command_timeout_s).above(0);
     s.field("max_dt_s", &C::max_dt_s).above(0);
     s.field("allowed_missed_cycles", &C::allowed_missed_cycles).at_least(0);
@@ -432,12 +435,17 @@ ParamSchema<ChassisConfig> chassis_config() {
     s.field("max_angular_velocity", &C::max_angular_velocity).above(0);
     s.field("max_linear_acceleration", &C::max_linear_acceleration).above(0);
     s.field("max_linear_deceleration", &C::max_linear_deceleration).above(0);
-    s.field("max_linear_reversal_deceleration", &C::max_linear_reversal_deceleration).above(0);
     s.field("max_angular_acceleration", &C::max_angular_acceleration).above(0);
     s.field("max_angular_deceleration", &C::max_angular_deceleration).above(0);
-    s.field("max_angular_reversal_deceleration", &C::max_angular_reversal_deceleration).above(0);
-    s.field("max_linear_jerk", &C::max_linear_jerk).above(0);
-    s.field("max_angular_jerk", &C::max_angular_jerk).above(0);
+    s.field("max_lateral_velocity", &C::max_lateral_velocity)
+        .at_least(0)
+        .doc("Omni body-y velocity limit (0 = max_linear_velocity).");
+    s.field("max_lateral_acceleration", &C::max_lateral_acceleration)
+        .at_least(0)
+        .doc("Omni body-y acceleration limit (0 = max_linear_acceleration).");
+    s.field("max_lateral_deceleration", &C::max_lateral_deceleration)
+        .at_least(0)
+        .doc("Omni body-y deceleration limit (0 = max_linear_deceleration).");
     s.field("position_tolerance", &C::position_tolerance).above(0);
     s.field("orientation_tolerance", &C::orientation_tolerance).above(0);
     s.field("base_frame", &C::base_frame).non_empty();
@@ -450,13 +458,12 @@ ParamSchema<ChassisPoseLimits> chassis_pose_limits() {
     s.field("max_linear_velocity", &C::max_linear_velocity).at_least(0).tunable();
     s.field("max_linear_acceleration", &C::max_linear_acceleration).at_least(0).tunable();
     s.field("max_linear_deceleration", &C::max_linear_deceleration).at_least(0).tunable();
-    s.field("max_linear_reversal_deceleration", &C::max_linear_reversal_deceleration).at_least(0).tunable();
-    s.field("max_linear_jerk", &C::max_linear_jerk).at_least(0).tunable();
+    s.field("max_lateral_velocity", &C::max_lateral_velocity).at_least(0).tunable();
+    s.field("max_lateral_acceleration", &C::max_lateral_acceleration).at_least(0).tunable();
+    s.field("max_lateral_deceleration", &C::max_lateral_deceleration).at_least(0).tunable();
     s.field("max_angular_velocity", &C::max_angular_velocity).at_least(0).tunable();
     s.field("max_angular_acceleration", &C::max_angular_acceleration).at_least(0).tunable();
     s.field("max_angular_deceleration", &C::max_angular_deceleration).at_least(0).tunable();
-    s.field("max_angular_reversal_deceleration", &C::max_angular_reversal_deceleration).at_least(0).tunable();
-    s.field("max_angular_jerk", &C::max_angular_jerk).at_least(0).tunable();
     s.field("planner_mode", &C::planner_mode,
             {{"axis_phase", ChassisPlannerMode::axis_phase},
              {"axis_time", ChassisPlannerMode::axis_time},

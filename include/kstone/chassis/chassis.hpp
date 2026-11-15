@@ -59,6 +59,9 @@ struct ChassisConfig {
     double target_orientation_deadband{0.0};
     double odom_timeout_s{
         0.25};  ///< 0 = odometry never goes stale. The chassis module uses the engine feedback_timeout_s.
+    double odom_latency_s{
+        0.0};  ///< Omni pose mode: base response delay; outputs sent since then are replayed
+               ///< onto the odometry before planning (0 = off).
     double command_timeout_s{0.25};
     double max_dt_s{0.1};
     int allowed_missed_cycles{2};
@@ -66,12 +69,13 @@ struct ChassisConfig {
     double max_angular_velocity{0.5};
     double max_linear_acceleration{0.75};
     double max_linear_deceleration{0.75};
-    double max_linear_reversal_deceleration{0.75};
     double max_angular_acceleration{1.5};
     double max_angular_deceleration{1.5};
-    double max_angular_reversal_deceleration{1.5};
-    double max_linear_jerk{3.0};
-    double max_angular_jerk{6.0};
+    /// Omni body-y limits; 0 = use the matching max_linear_* value. Translation is then bounded by the
+    /// ellipse (vx/x_limit)^2 + (vy/y_limit)^2 <= 1, which is the planar norm when both are equal.
+    double max_lateral_velocity{0.0};
+    double max_lateral_acceleration{0.0};
+    double max_lateral_deceleration{0.0};
     double position_tolerance{0.01};
     double orientation_tolerance{0.02};
     std::string base_frame{"base_link"};
@@ -79,18 +83,17 @@ struct ChassisConfig {
     KSTONE_EXPORT Status validate() const;
 };
 
-/// Runtime-tunable pose-tracking limits; 0 disables a bound. Velocity mode uses the config maxima.
+/// Runtime-tunable pose-tracking limits; 0 disables a bound. Velocity mode uses the config velocity maxima.
 struct ChassisPoseLimits {
     double max_linear_velocity{0.0};
     double max_linear_acceleration{0.0};
     double max_linear_deceleration{0.0};
-    double max_linear_reversal_deceleration{0.0};
-    double max_linear_jerk{0.0};
+    double max_lateral_velocity{0.0};  ///< Body y; 0 = use the matching linear bound.
+    double max_lateral_acceleration{0.0};
+    double max_lateral_deceleration{0.0};
     double max_angular_velocity{0.0};
     double max_angular_acceleration{0.0};
     double max_angular_deceleration{0.0};
-    double max_angular_reversal_deceleration{0.0};
-    double max_angular_jerk{0.0};
     ChassisPlannerMode planner_mode{ChassisPlannerMode::axis_phase};
 
     KSTONE_EXPORT Status validate() const;

@@ -1649,7 +1649,9 @@ Status ChassisModule::configure(ModuleSetup& setup) {
     if (Status s = setup.lock(locked); !s) return s;
 
     const ChassisConfig& cc = controller_->config();
-    const double lateral = cc.kinematics == ChassisKinematics::omni ? cc.max_linear_velocity : 0.0;
+    const double omni_lateral =
+        cc.max_lateral_velocity > 0 ? cc.max_lateral_velocity : cc.max_linear_velocity;
+    const double lateral = cc.kinematics == ChassisKinematics::omni ? omni_lateral : 0.0;
     PortInfo port;
     port.name = "velocity";
     port.type = PortType::vector;

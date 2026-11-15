@@ -39,26 +39,39 @@ bool ruckig_ok(ruckig::Result result) {
     return result == ruckig::Result::Working || result == ruckig::Result::Finished;
 }
 
-// Acceleration cap for one axis: reversal while moving against the displacement, deceleration at the goal.
-double acceleration_cap(double velocity, double displacement, double acceleration, double deceleration,
-                        double reversal) {
-    if (velocity * displacement < -1e-12) return reversal;
-    if (std::abs(displacement) < 1e-9) return deceleration;
+// Acceleration cap for one axis: deceleration while moving against the displacement or at the goal.
+double acceleration_cap(double velocity, double displacement, double acceleration, double deceleration) {
+    if (velocity * displacement < -1e-12 || std::abs(displacement) < 1e-9) return deceleration;
     return acceleration;
 }
 
 // Distance one axis can cover in about 1000 s from rest; farther goals are planned toward this horizon and
 // re-planned every cycle, since Ruckig rejects trajectories longer than ~7.6e3 s.
-double planning_horizon(double velocity, double acceleration, double jerk) {
+double planning_horizon(double velocity, double acceleration) {
     constexpr double t = 1000.0;
     double horizon = std::numeric_limits<double>::infinity();
     if (std::isfinite(velocity)) horizon = std::min(horizon, velocity * t / 2);
     if (std::isfinite(acceleration)) horizon = std::min(horizon, acceleration * t * t / 8);
-    if (std::isfinite(jerk)) horizon = std::min(horizon, jerk * t * t * t / 64);
     return horizon;
 }
 
 double clamp_magnitude(double value, double limit) { return std::clamp(value, -limit, limit); }
+
+double lateral_or(double lateral, double linear) { return lateral > 0.0 ? lateral : linear; }
+
+// Largest world-axis box whose corners stay inside the body-frame ellipse (vx/x)^2 + (vy/y)^2 <= 1 at the
+// heading (c, s) = (cos yaw, sin yaw). Equal x and y give the yaw-independent x/sqrt(2) of the planar norm.
+std::array<double, 2> world_axis_bounds(double x, double y, double c, double s) {
+    const double ix = 1.0 / (x * x);  // 0 for an unbounded axis
+    const double iy = 1.0 / (y * y);
+    const double qxx = c * c * ix + s * s * iy;
+    const double qyy = s * s * ix + c * c * iy;
+    const double qxy = std::abs(c * s * (ix - iy));
+    const double rho = qxx > 0.0 && qyy > 0.0 ? std::min(1.0, qxy / std::sqrt(qxx * qyy)) : 0.0;
+    const double k = 2.0 * (1.0 + rho);
+    return {qxx > 0.0 ? 1.0 / std::sqrt(k * qxx) : kInfinity,
+            qyy > 0.0 ? 1.0 / std::sqrt(k * qyy) : kInfinity};
+}
 
 // ULP guard: values a hair above a limit are snapped onto it so Ruckig accepts the state.
 void snap(double& value, double limit) {
@@ -221,6 +234,10 @@ Status ChassisConfig::validate() const {
         {target_position_deadband, "target_position_deadband"},
         {target_orientation_deadband, "target_orientation_deadband"},
         {odom_timeout_s, "odom_timeout_s"},
+        {odom_latency_s, "odom_latency_s"},
+        {max_lateral_velocity, "max_lateral_velocity"},
+        {max_lateral_acceleration, "max_lateral_acceleration"},
+        {max_lateral_deceleration, "max_lateral_deceleration"},
     };
     for (const auto& [value, name] : nonnegative)
         if (auto status = require_nonnegative(value, name); !status) return status;
@@ -231,12 +248,8 @@ Status ChassisConfig::validate() const {
         {max_angular_velocity, "max_angular_velocity"},
         {max_linear_acceleration, "max_linear_acceleration"},
         {max_linear_deceleration, "max_linear_deceleration"},
-        {max_linear_reversal_deceleration, "max_linear_reversal_deceleration"},
         {max_angular_acceleration, "max_angular_acceleration"},
         {max_angular_deceleration, "max_angular_deceleration"},
-        {max_angular_reversal_deceleration, "max_angular_reversal_deceleration"},
-        {max_linear_jerk, "max_linear_jerk"},
-        {max_angular_jerk, "max_angular_jerk"},
         {position_tolerance, "position_tolerance"},
         {orientation_tolerance, "orientation_tolerance"},
     };
@@ -250,10 +263,9 @@ Status ChassisConfig::validate() const {
 }
 
 Status ChassisPoseLimits::validate() const {
-    for (double value :
-         {max_linear_velocity, max_linear_acceleration, max_linear_deceleration,
-          max_linear_reversal_deceleration, max_linear_jerk, max_angular_velocity, max_angular_acceleration,
-          max_angular_deceleration, max_angular_reversal_deceleration, max_angular_jerk})
+    for (double value : {max_linear_velocity, max_linear_acceleration, max_linear_deceleration,
+                         max_lateral_velocity, max_lateral_acceleration, max_lateral_deceleration,
+                         max_angular_velocity, max_angular_acceleration, max_angular_deceleration})
         if (auto status = require_nonnegative(value, "pose limit"); !status) return status;
     switch (planner_mode) {
         case ChassisPlannerMode::axis_phase:
@@ -265,10 +277,9 @@ Status ChassisPoseLimits::validate() const {
 }
 
 bool ChassisPoseLimits::bypass() const noexcept {
-    for (double value :
-         {max_linear_velocity, max_linear_acceleration, max_linear_deceleration,
-          max_linear_reversal_deceleration, max_linear_jerk, max_angular_velocity, max_angular_acceleration,
-          max_angular_deceleration, max_angular_reversal_deceleration, max_angular_jerk})
+    for (double value : {max_linear_velocity, max_linear_acceleration, max_linear_deceleration,
+                         max_lateral_velocity, max_lateral_acceleration, max_lateral_deceleration,
+                         max_angular_velocity, max_angular_acceleration, max_angular_deceleration})
         if (value != 0.0) return false;
     return true;
 }
@@ -286,6 +297,12 @@ struct ChassisController::Impl {
     Pose2D pose, ramp;
     std::optional<Pose2D> pose_target, planned_pose_override;
     Twist2D target, out, planned_velocity, out_acceleration;
+    // (time, output) history for odom_latency_s; fixed capacity so the control loop never allocates.
+    std::array<std::pair<double, Twist2D>, 1024> sent{};
+    std::size_t sent_head{0}, sent_size{0};
+    const std::pair<double, Twist2D>& sent_at(std::size_t i) const {
+        return sent[(sent_head + i) % sent.size()];
+    }
     // Differential path state.
     std::optional<Pose2D> path_goal, settled;
     DiffPhase phase{DiffPhase::align};
@@ -318,6 +335,34 @@ struct ChassisController::Impl {
 
     bool odom_fresh(double now) const {
         return odom_stamp && now - *odom_stamp >= 0 && now - *odom_stamp <= odom_timeout();
+    }
+
+    void record_output(double now) {
+        if (config.odom_latency_s <= 0) return;
+        if (sent_size > 0 && sent_at(sent_size - 1).first >= now) {
+            sent[(sent_head + sent_size - 1) % sent.size()].second = out;
+        } else {
+            if (sent_size == sent.size()) sent_head = (sent_head + 1) % sent.size(), --sent_size;
+            sent[(sent_head + sent_size) % sent.size()] = {now, out};
+            ++sent_size;
+        }
+        const double keep = now - config.odom_latency_s - std::min(odom_timeout(), 1.0);
+        while (sent_size > 1 && sent_at(1).first <= keep)
+            sent_head = (sent_head + 1) % sent.size(), --sent_size;
+    }
+
+    // Odometry reflects only the outputs sent up to odom_latency_s before its stamp; replay the later ones,
+    // otherwise the planner keeps pushing toward a goal the base has already been told to reach.
+    Pose2D planning_pose(double now) const {
+        if (config.odom_latency_s <= 0 || !odom_fresh(now)) return pose;
+        Pose2D p = pose;
+        const double from = *odom_stamp - config.odom_latency_s;
+        for (std::size_t i = 0; i < sent_size; ++i) {
+            const double begin = std::max(sent_at(i).first, from);
+            const double end = i + 1 < sent_size ? sent_at(i + 1).first : now;
+            if (end > begin) p = integrate_se2(p, sent_at(i).second, end - begin);
+        }
+        return p;
     }
 
     void clear_motion() {
@@ -434,48 +479,51 @@ struct ChassisController::Impl {
             body = nominal;
             return true;
         }
-        const double c = std::cos(pose.yaw);
-        const double s = std::sin(pose.yaw);
+        const Pose2D start = planning_pose(integrated_until.value_or(0.0));
+        const double c = std::cos(start.yaw);
+        const double s = std::sin(start.yaw);
         std::array<double, 3> velocity{c * out.vx - s * out.vy, s * out.vx + c * out.vy, out.wz};
         std::array<double, 3> acceleration{c * out_acceleration.vx - s * out_acceleration.vy,
                                            s * out_acceleration.vx + c * out_acceleration.vy,
                                            out_acceleration.wz};
-        const double yaw_goal = pose.yaw + wrap_angle(goal.yaw - pose.yaw);
-        const std::array<double, 3> position{pose.x, pose.y, pose.yaw};
+        const double yaw_goal = start.yaw + wrap_angle(goal.yaw - start.yaw);
+        const std::array<double, 3> position{start.x, start.y, start.yaw};
         std::array<double, 3> goal_position{goal.x, goal.y, yaw_goal};
         for (std::size_t i = 0; i < 3; ++i)
             if (std::abs(goal_position[i] - position[i]) < 1e-9 && std::abs(velocity[i]) < 1e-8)
                 velocity[i] = acceleration[i] = 0.0;
-        const double dx = goal.x - pose.x;
-        const double dy = goal.y - pose.y;
+        const double dx = goal.x - start.x;
+        const double dy = goal.y - start.y;
+        // Body x uses the linear limits, body y the lateral ones (0 = linear); both map to world-axis bounds.
         const double lv = or_infinity(limits.max_linear_velocity);
         const double av = or_infinity(limits.max_angular_velocity);
         const double la = or_infinity(limits.max_linear_acceleration);
         const double ld = limits.max_linear_deceleration > 0 ? limits.max_linear_deceleration : la;
-        const double lr =
-            limits.max_linear_reversal_deceleration > 0 ? limits.max_linear_reversal_deceleration : ld;
+        const double yv = or_infinity(lateral_or(limits.max_lateral_velocity, limits.max_linear_velocity));
+        const double ya =
+            or_infinity(lateral_or(limits.max_lateral_acceleration, limits.max_linear_acceleration));
+        const double yd_set = lateral_or(limits.max_lateral_deceleration, limits.max_linear_deceleration);
+        const double yd = yd_set > 0 ? yd_set : ya;
+        const auto wv = world_axis_bounds(lv, yv, c, s);
+        const auto wa = world_axis_bounds(la, ya, c, s);
+        const auto wd = world_axis_bounds(ld, yd, c, s);
         const double aa = or_infinity(limits.max_angular_acceleration);
         const double ad = limits.max_angular_deceleration > 0 ? limits.max_angular_deceleration : aa;
-        const double ar =
-            limits.max_angular_reversal_deceleration > 0 ? limits.max_angular_reversal_deceleration : ad;
-        const std::array<double, 3> max_velocity{lv / kRootTwo, lv / kRootTwo, av};
+        const std::array<double, 3> max_velocity{wv[0], wv[1], av};
         const std::array<double, 3> max_acceleration{
-            acceleration_cap(velocity[0], dx, la / kRootTwo, ld / kRootTwo, lr / kRootTwo),
-            acceleration_cap(velocity[1], dy, la / kRootTwo, ld / kRootTwo, lr / kRootTwo),
-            acceleration_cap(velocity[2], yaw_goal - pose.yaw, aa, ad, ar)};
-        const double lj = or_infinity(limits.max_linear_jerk) / kRootTwo;
-        const double aj = or_infinity(limits.max_angular_jerk);
+            acceleration_cap(velocity[0], dx, wa[0], wd[0]), acceleration_cap(velocity[1], dy, wa[1], wd[1]),
+            acceleration_cap(velocity[2], yaw_goal - start.yaw, aa, ad)};
         for (std::size_t i = 0; i < 3; ++i) {
             snap(velocity[i], max_velocity[i]);
             snap(acceleration[i], max_acceleration[i]);
         }
-        const double reach = planning_horizon(max_velocity[0], la / kRootTwo, lj);
+        const double reach = std::min(planning_horizon(wv[0], wa[0]), planning_horizon(wv[1], wa[1]));
         const double distance = std::hypot(dx, dy);
         if (distance > reach) {
-            goal_position[0] = pose.x + dx * reach / distance;
-            goal_position[1] = pose.y + dy * reach / distance;
+            goal_position[0] = start.x + dx * reach / distance;
+            goal_position[1] = start.y + dy * reach / distance;
         }
-        goal_position[2] = pose.yaw + clamp_magnitude(yaw_goal - pose.yaw, planning_horizon(av, aa, aj));
+        goal_position[2] = start.yaw + clamp_magnitude(yaw_goal - start.yaw, planning_horizon(av, aa));
         auto& input = omni_input;
         input.current_position = position;
         input.current_velocity = velocity;
@@ -488,7 +536,7 @@ struct ChassisController::Impl {
         input.max_acceleration = max_acceleration;
         input.min_acceleration =
             std::array<double, 3>{-max_acceleration[0], -max_acceleration[1], -max_acceleration[2]};
-        input.max_jerk = {lj, lj, aj};
+        // No jerk limit: the base firmware smooths its own acceleration.
         const bool phase_sync = limits.planner_mode != ChassisPlannerMode::axis_time;
         input.synchronization = phase_sync ? ruckig::Synchronization::Phase : ruckig::Synchronization::Time;
         if (!run_ruckig(omni, input, omni_output, dt, "omni chassis Ruckig update failed: ", error)) {
@@ -513,27 +561,25 @@ struct ChassisController::Impl {
 
     // Single-axis regulator used by the differential phase machine.
     bool position_regulator(double position, double velocity, double acceleration, double goal,
-                            double velocity_limit, double acceleration_limit, double deceleration,
-                            double reversal, double jerk, double dt, Regulated& result) {
+                            double velocity_limit, double acceleration_limit, double deceleration, double dt,
+                            Regulated& result) {
         const double displacement = goal - position;
         const double cap =
-            or_infinity(acceleration_cap(velocity, displacement, acceleration_limit, deceleration, reversal));
+            or_infinity(acceleration_cap(velocity, displacement, acceleration_limit, deceleration));
         const double effective = std::max(cap, std::abs(acceleration));
         auto& input = axis_input;
         input.current_position = {position};
         input.current_velocity = {velocity};
         input.current_acceleration = {acceleration};
         input.target_position = {
-            position + clamp_magnitude(displacement,
-                                       planning_horizon(or_infinity(velocity_limit),
-                                                        or_infinity(acceleration_limit), or_infinity(jerk)))};
+            position + clamp_magnitude(displacement, planning_horizon(or_infinity(velocity_limit),
+                                                                      or_infinity(acceleration_limit)))};
         input.target_velocity = {0.0};
         input.target_acceleration = {0.0};
         input.max_velocity = {or_infinity(velocity_limit)};
         input.min_velocity = std::array<double, 1>{-or_infinity(velocity_limit)};
         input.max_acceleration = {effective};
         input.min_acceleration = std::array<double, 1>{-effective};
-        input.max_jerk = {or_infinity(jerk)};
         if (!run_ruckig(axis, input, axis_output, dt,
                         "differential chassis Ruckig position update failed: ", error))
             return false;
@@ -615,16 +661,14 @@ struct ChassisController::Impl {
         Regulated linear;
         if (!position_regulator(linear_position, out.vx, out_acceleration.vx, linear_target,
                                 limits.max_linear_velocity, limits.max_linear_acceleration,
-                                limits.max_linear_deceleration, limits.max_linear_reversal_deceleration,
-                                limits.max_linear_jerk, dt, linear))
+                                limits.max_linear_deceleration, dt, linear))
             return false;
         if (linear.velocity * straight_direction < 0)
             linear = Regulated{};  // never reverse on a fixed segment
         Regulated angular;
         if (!position_regulator(0.0, out.wz, out_acceleration.wz, angular_displacement,
                                 limits.max_angular_velocity, limits.max_angular_acceleration,
-                                limits.max_angular_deceleration, limits.max_angular_reversal_deceleration,
-                                limits.max_angular_jerk, dt, angular))
+                                limits.max_angular_deceleration, dt, angular))
             return false;
         if (phase == DiffPhase::final_align && distance <= capture_position &&
             std::abs(yaw_error) <= capture_rotation && std::abs(angular.velocity) < 1e-6) {
@@ -682,22 +726,17 @@ struct ChassisController::Impl {
                          : ChassisReason::tracking;
             return snapshot(now);
         }
-        // Velocity mode: first-order limiter with the configured maxima.
+        // Velocity mode: the command is only clamped to the configured maxima; the base firmware ramps it.
         const auto& c = config;
         double vx = nominal.vx;
         double vy = c.kinematics == ChassisKinematics::omni ? nominal.vy : 0.0;
-        double scale = std::min(1.0, c.max_linear_velocity / std::max(std::hypot(vx, vy), 1e-15));
-        vx *= scale;
-        vy *= scale;
+        const double vy_max = lateral_or(c.max_lateral_velocity, c.max_linear_velocity);
+        const double scale =
+            std::min(1.0, 1.0 / std::max(std::hypot(vx / c.max_linear_velocity, vy / vy_max), 1e-15));
         const double wz = std::clamp(nominal.wz, -c.max_angular_velocity, c.max_angular_velocity);
-        const double dx = vx - out.vx;
-        const double dy = vy - out.vy;
-        scale = std::min(1.0, c.max_linear_acceleration * dt / std::max(std::hypot(dx, dy), 1e-15));
-        const double dw =
-            std::clamp(wz - out.wz, -c.max_angular_acceleration * dt, c.max_angular_acceleration * dt);
-        out = {out.vx + dx * scale, out.vy + dy * scale, out.wz + dw};
+        out = {vx * scale, vy * scale, wz};
         planned_velocity = out;
-        // The first-order limiter has no acceleration state; handing its step rate to pose mode overshoots.
+        // Velocity mode has no acceleration state; handing its step rate to pose mode overshoots.
         out_acceleration = Twist2D{};
         output_valid_until = *command_stamp + c.command_timeout_s;
         reason = ChassisReason::tracking;
@@ -714,13 +753,12 @@ Result<ChassisController> ChassisController::create(ChassisConfig config) {
     l.max_linear_velocity = c.max_linear_velocity;
     l.max_linear_acceleration = c.max_linear_acceleration;
     l.max_linear_deceleration = c.max_linear_deceleration;
-    l.max_linear_reversal_deceleration = c.max_linear_reversal_deceleration;
-    l.max_linear_jerk = c.max_linear_jerk;
+    l.max_lateral_velocity = c.max_lateral_velocity;
+    l.max_lateral_acceleration = c.max_lateral_acceleration;
+    l.max_lateral_deceleration = c.max_lateral_deceleration;
     l.max_angular_velocity = c.max_angular_velocity;
     l.max_angular_acceleration = c.max_angular_acceleration;
     l.max_angular_deceleration = c.max_angular_deceleration;
-    l.max_angular_reversal_deceleration = c.max_angular_reversal_deceleration;
-    l.max_angular_jerk = c.max_angular_jerk;
     l.planner_mode = c.kinematics == ChassisKinematics::differential ? ChassisPlannerMode::straight
                                                                      : ChassisPlannerMode::axis_phase;
     return ChassisController(std::move(impl));
@@ -767,6 +805,7 @@ Status ChassisController::start(double now, const std::optional<Pose2D>& pose) {
     if (pose && !finite(*pose))
         return make_error(ErrorCode::invalid_argument, "chassis: pose must be finite");
     if (pose) m.pose = m.ramp = *pose;
+    m.sent_head = m.sent_size = 0;
     m.last_step = m.integrated_until = now;
     m.state = ChassisState::active;
     m.reason = ChassisReason::ready;
@@ -792,6 +831,7 @@ Status ChassisController::resynchronize(double now, const std::optional<Pose2D>&
         return make_error(ErrorCode::invalid_argument, "chassis: pose must be finite");
     if (pose) m.pose = *pose;
     m.clear_motion();
+    m.sent_head = m.sent_size = 0;
     m.last_step = m.integrated_until = now;
     m.state = ChassisState::active;
     m.reason = ChassisReason::resynchronized;
@@ -862,10 +902,16 @@ ChassisOutput ChassisController::service(double now, bool solve_enabled) {
         m.clear_motion();
         m.reason = ChassisReason::command_timeout;
     }
+    // The zeroed output must enter the replay history, or the last moving output is replayed over the pause.
+    m.record_output(now);
     return m.snapshot(now);
 }
 
-ChassisOutput ChassisController::step(double now) { return impl_->step(now); }
+ChassisOutput ChassisController::step(double now) {
+    ChassisOutput output = impl_->step(now);
+    impl_->record_output(now);
+    return output;
+}
 ChassisOutput ChassisController::snapshot(double now) const { return impl_->snapshot(now); }
 
 ChassisCommandSnapshot ChassisController::command_snapshot() const {
