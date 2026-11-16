@@ -22,7 +22,7 @@ ctest --test-dir build
 
 配置时会打印依赖来源，例如：
 
-```
+```text
 -- kstone: Eigen 3.4.1, Pinocchio 4.1.0, Coal 3.0.3 from pip wheels (...)
 ```
 

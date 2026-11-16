@@ -21,7 +21,7 @@ ctest --test-dir build
 
 Configure prints where the dependencies came from, for example:
 
-```
+```text
 -- kstone: Eigen 3.4.1, Pinocchio 4.1.0, Coal 3.0.3 from pip wheels (...)
 ```
 
