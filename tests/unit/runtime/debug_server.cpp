@@ -230,23 +230,29 @@ TEST_CASE("debug server: hello, state, commands and replies over loopback") {
     client.send("not json");
     client.send(R"({"op":"set_port","id":5,"module":"arm","port":"target","labels":["j3"],"value":[0.8]})");
     client.send(R"({"op":"set_port","id":6,"module":"arm","port":"target","labels":["j9"],"value":[0.8]})");
+    // Rejected after resolving its labels; the reused slot must not keep them for the next full write.
+    client.send(
+        R"({"op":"set_port","id":7,"module":"arm","port":"target","labels":["j3"],"value":[0.8,0.9]})");
+    client.send(R"({"op":"set_port","id":8,"module":"arm","port":"target","value":[0.5,-0.3,0.8]})");
 
-    bool ok[7]{};
-    bool seen[7]{};
-    for (int n = 0; n < 7; ++n) {
+    bool ok[9]{};
+    bool seen[9]{};
+    for (int n = 0; n < 9; ++n) {
         ConfigNode reply = client.read_type("reply");
         const ConfigNode* id = reply.find("id");
         const int i =
             id != nullptr && id->kind() == ConfigNode::Kind::number ? static_cast<int>(id->as_number()) : 0;
         REQUIRE(i >= 0);
-        REQUIRE(i < 7);
+        REQUIRE(i < 9);
         seen[i] = true;
         ok[i] = reply.find("ok")->as_bool();
         if (!ok[i]) CHECK(reply.find("error") != nullptr);
     }
-    CHECK((seen[0] && seen[1] && seen[2] && seen[3] && seen[4] && seen[5] && seen[6]));
+    CHECK((seen[0] && seen[1] && seen[2] && seen[3] && seen[4] && seen[5] && seen[6] && seen[7] && seen[8]));
     CHECK(ok[5]);
     CHECK_FALSE(ok[6]);
+    CHECK_FALSE(ok[7]);
+    CHECK(ok[8]);
     CHECK(ok[1]);
     CHECK_FALSE(ok[2]);
     CHECK_FALSE(ok[3]);

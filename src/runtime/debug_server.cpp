@@ -897,6 +897,7 @@ struct DebugServer::Impl {
     Status parse_command(const ConfigNode& doc, const std::string& name, Command& cmd) {
         cmd.params = ConfigNode{};
         cmd.module = 0;
+        cmd.elements.clear();  // Slots are reused; a stale list would retarget a later set_port.
         if (name == "pause") {
             const ConfigNode* paused = doc.find("paused");
             if (paused == nullptr || paused->kind() != ConfigNode::Kind::boolean)
