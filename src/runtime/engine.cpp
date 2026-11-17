@@ -910,7 +910,10 @@ Status Engine::step_impl(double now) {
                 if (auto s = d.sync_group(i, g.hold_pending || resume, g.hold_pending); !s) return s;
                 g.hold_pending = false;
                 // Feedback must stay fresh for a whole timeout window before the commanded state is trusted.
-                if (start - g.fresh_since_ns >= d.timeout_ns) {
+                // Samples must keep arriving across it: a short burst stays fresh for one timeout after
+                // its last sample, which alone would satisfy the window.
+                if (start - g.fresh_since_ns >= d.timeout_ns &&
+                    d.group_stamp(i) - g.fresh_since_ns >= d.timeout_ns) {
                     g.attached = true;
                     g.fresh_since_ns = -1;
                     d.stats.attaches++;

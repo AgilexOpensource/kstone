@@ -1321,6 +1321,35 @@ TEST_CASE("engine: stale feedback detaches, reattaching holds then syncs again a
     CHECK(f.engine.stats().resyncs == resyncs + 2);
 }
 
+TEST_CASE("engine: a short burst of feedback does not attach; samples must span the window") {
+    StampedFixture f = make_stamped(0.05, {}, false);
+    REQUIRE(f.engine.step(0.01));
+    CHECK_FALSE(f.engine.attached());
+
+    // One sample, then silence: it stays fresh for one timeout but never fills the window.
+    f.robot->stamp_ns = f.clock->now_ns();
+    for (int k = 2; k <= 7; ++k) {
+        REQUIRE(f.engine.step(0.01 * k));
+        CHECK(f.engine.fresh());
+        CHECK_FALSE(f.engine.attached());
+        f.clock->advance_ns(10'000'000);
+    }
+    CHECK(f.engine.stats().attaches == 0);
+
+    // Samples every 10 ms across the window attach once they span it.
+    f.clock->advance_ns(60'000'000);
+    REQUIRE(f.engine.step(0.08));
+    CHECK_FALSE(f.engine.fresh());
+    int k = 9;
+    for (; k < 30 && !f.engine.attached(); ++k) {
+        f.clock->advance_ns(10'000'000);
+        f.robot->stamp_ns = f.clock->now_ns();
+        REQUIRE(f.engine.step(0.01 * k));
+    }
+    CHECK(f.engine.attached());
+    CHECK(k - 9 == 6);  // the first fresh cycle plus 50 ms of samples
+}
+
 TEST_CASE("resolve_feedback_groups: configured groups first, then default, mimics follow their leader") {
     auto model = Model::load(ModelSource::file((kFixtures / "arm.urdf").string()), {}, Context::defaults());
     REQUIRE(model);
