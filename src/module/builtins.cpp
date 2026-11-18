@@ -212,10 +212,12 @@ ConfigNode FrameTargetModule::tune_schema() const {
 Status FrameTargetModule::finish(HomeStatus status) {
     home_.finish(status);
     if (Status s = trajectory_->tune(config_.trajectory); !s) return s;
-    // Timed out: contribute() moves target and ramp to the ideal pose it reached; aborted stops on the ramp.
+    // Timed out: contribute() moves target and ramp to the ideal pose it reached; aborted or cancelled stops on
+    // the ramp (cancelled before the motion began keeps the previous target).
     if (status == HomeStatus::timed_out)
         hold_observed_ = true;
-    else if (status != HomeStatus::succeeded && trajectory_->initialized())
+    else if (status != HomeStatus::succeeded && trajectory_->initialized() &&
+             (status != HomeStatus::cancelled || home_.started()))
         target_ = trajectory_->ramp_pose();
     has_target_ = true;
     return {};
@@ -702,15 +704,16 @@ ConfigNode JointTargetModule::tune_schema() const {
 Status JointTargetModule::finish(HomeStatus status) {
     home_.finish(status);
     // Timed out: hold the ideal joints it reached (e.g. blocked by collision or unreachable), not home.
+    // Aborted or cancelled: stop on the profile (cancelled before the motion began keeps the previous target).
     if (status == HomeStatus::timed_out)
         target_ = ideal_;
-    else if (status != HomeStatus::succeeded)
+    else if (status != HomeStatus::succeeded && (status != HomeStatus::cancelled || home_.started()))
         target_ = trajectory_->reference();
     if (Status s = trajectory_->configure(config_.trajectory); !s) return s;
     has_target_ = true;
-    // A finished home keeps the joints until other input takes them; an aborted one lets go.
+    // A finished or cancelled home keeps the joints until other input takes them; an aborted one lets go.
     claiming_ = status != HomeStatus::aborted;
-    settled_ = claiming_;
+    settled_ = claiming_ && status != HomeStatus::cancelled;
     return {};
 }
 

@@ -71,6 +71,10 @@ class KSTONE_EXPORT FrameTargetModule final : public Module {
     /// Port "target" (pose): set_target().
     Status read_port(std::size_t index, PortValue& out) const override;
     Status request_home() override;
+    Status cancel_home() override {
+        home_.cancel();
+        return {};
+    }
     bool homeable() const noexcept override { return true; }
     HomeStatus home_status() const noexcept { return home_.status(); }
     const char* home_state() const noexcept override { return to_string(home_.status()); }
@@ -172,6 +176,10 @@ class KSTONE_EXPORT JointTargetModule final : public Module {
     /// Port "target" (vector, one element per joint): set_target().
     Status read_port(std::size_t index, PortValue& out) const override;
     Status request_home() override;
+    Status cancel_home() override {
+        home_.cancel();
+        return {};
+    }
     bool homeable() const noexcept override { return true; }
     HomeStatus home_status() const noexcept { return home_.status(); }
     const char* home_state() const noexcept override { return to_string(home_.status()); }

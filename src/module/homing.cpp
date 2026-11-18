@@ -19,6 +19,8 @@ const char* to_string(HomeStatus value) noexcept {
             return "timed_out";
         case HomeStatus::aborted:
             return "aborted";
+        case HomeStatus::cancelled:
+            return "cancelled";
     }
     return "unknown";
 }
@@ -42,6 +44,8 @@ void Homing::request() noexcept {
     status_ = HomeStatus::waiting;
     prepared_ = false;
     timing_ = false;
+    cancel_ = false;
+    started_ = false;
 }
 
 bool Homing::update(const Cycle& cycle) noexcept {
@@ -49,6 +53,11 @@ bool Homing::update(const Cycle& cycle) noexcept {
     last_index_ = cycle.index;
     prepared_ = true;
     if (!active()) return false;
+    if (cancel_) {
+        cancel_ = false;
+        status_ = HomeStatus::cancelled;
+        return true;
+    }
     if (!timing_) {
         progressed_ = cycle.now;
         anchor_ = std::numeric_limits<double>::infinity();
@@ -82,6 +91,7 @@ Claim Homing::claim(const Mask& joints) const noexcept {
 bool Homing::start() noexcept {
     if (status_ != HomeStatus::waiting) return false;
     status_ = HomeStatus::executing;
+    started_ = true;
     timing_ = false;  // the no-progress clock starts at the next update()
     return true;
 }

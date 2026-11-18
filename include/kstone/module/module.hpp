@@ -251,9 +251,13 @@ class KSTONE_EXPORT Module {
     }
     /// unsupported unless the module can home.
     virtual Status request_home();
+    /// Stop a running homing on the next step: the module stops smoothly where its ramp is and keeps the joints
+    /// (home_state cancelled). No-op if not homing; unsupported unless the module can home.
+    virtual Status cancel_home();
     /// True if request_home() is supported.
     virtual bool homeable() const noexcept { return false; }
-    /// Homing state name (idle, waiting, executing, succeeded, timed_out, aborted); nullptr if not homeable.
+    /// Homing state name (idle, waiting, executing, succeeded, timed_out, aborted, cancelled); nullptr if not
+    /// homeable.
     virtual const char* home_state() const noexcept { return nullptr; }
 
     /// Valid after configure().

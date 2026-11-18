@@ -67,7 +67,7 @@ center_of_mass, self_collision and world_collision join the solve as inequality 
 
 ## Homing
 
-Modules with `Module.homeable` true (frame_target, joint_target) accept `home()`. `home_state` is `idle` / `waiting` / `executing` / `succeeded` / `timed_out` / `aborted`. `home_motion.velocity_scale` sets the speed. `home_motion.timeout_s` is a no-progress timeout, so a move that keeps approaching is not cut off.
+Modules with `Module.homeable` true (frame_target, joint_target) accept `home()` and `cancel_home()`. `home_state` is `idle` / `waiting` / `executing` / `succeeded` / `timed_out` / `aborted` / `cancelled`. `cancel_home()` stops a running homing where its ramp is; the module stays enabled and keeps holding that position (`aborted`, from disabling, lets a joint target go). `home_motion.velocity_scale` sets the speed. `home_motion.timeout_s` is a no-progress timeout, so a move that keeps approaching is not cut off.
 
 `ModuleSet::home_all()` (Python `Engine.home_all()`, debug op `home_all`) homes, per joint, the module that controls it as of the last step: the granted claim holder, otherwise the enabled module that most recently received a target there. Which module controls a joint is thus decided by where the user last sent a target. If that module is not homeable (gaze), the joint keeps still; joints nobody controls are skipped. A module held by another is never homed by `home_all`, but its own `home` still works.
 

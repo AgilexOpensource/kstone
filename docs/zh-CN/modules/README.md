@@ -68,7 +68,7 @@ center_of_mass、self_collision、world_collision 作为不等式约束加入求
 
 ## 回零
 
-`Module.homeable` 为真的模块（frame_target、joint_target）可调用 `home()`，`home_state` 为 `idle` / `waiting` / `executing` / `succeeded` / `timed_out` / `aborted`。`home_motion.velocity_scale` 控制速度，`home_motion.timeout_s` 是"没有进展"的超时，持续接近时不限时。
+`Module.homeable` 为真的模块（frame_target、joint_target）可调用 `home()` 和 `cancel_home()`，`home_state` 为 `idle` / `waiting` / `executing` / `succeeded` / `timed_out` / `aborted` / `cancelled`。`cancel_home()` 让正在进行的回零停在当前插值点，模块保持使能并保持该位置（禁用导致的 `aborted` 会让 joint_target 放开关节）。`home_motion.velocity_scale` 控制速度，`home_motion.timeout_s` 是"没有进展"的超时，持续接近时不限时。
 
 `ModuleSet::home_all()`（Python `Engine.home_all()`，调试协议 `home_all`）按关节找出上一步控制它的模块并让其回 home：优先是获得授权的声明方，否则是最近一次在这些关节上收到目标的启用模块。也就是说，谁控制关节由用户最后给哪个模块下发目标决定。控制方不可回 home（如 gaze）时该关节保持不动；无人控制的关节跳过。被占用的模块不会被 `home_all` 回 home，但单独调用它的 `home` 仍然有效。
 

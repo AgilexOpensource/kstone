@@ -153,6 +153,23 @@ TEST_CASE("homing: state machine, timeout, preemption and skipped steps") {
         CHECK(h.status() == HomeStatus::aborted);
         CHECK(std::string(to_string(HomeStatus::aborted)) == "aborted");
     }
+    {
+        Homing h;
+        h.cancel();  // not homing: no-op
+        CHECK(h.status() == HomeStatus::idle);
+        h.request();
+        CHECK_FALSE(h.update(at(1, 0.0)));
+        CHECK(h.start());
+        CHECK(h.started());
+        h.cancel();
+        CHECK(h.update(at(2, 0.1)));
+        CHECK(h.status() == HomeStatus::cancelled);
+        CHECK(std::string(to_string(HomeStatus::cancelled)) == "cancelled");
+        h.request();  // a new request clears a stale cancel
+        CHECK_FALSE(h.started());
+        CHECK_FALSE(h.update(at(3, 0.2)));
+        CHECK(h.status() == HomeStatus::waiting);
+    }
 }
 
 TEST_CASE("frame_target module: holds its pose, then tracks a target through the trajectory") {
@@ -1715,6 +1732,47 @@ TEST_CASE("frame_target module: preemptive home holds others, rejects targets an
     CHECK((pose_at(m, slow_loop.q, "tool").translation() - reached.translation()).norm() < 1e-3);
     CHECK(slow->set_target(stop));
 
+    // Cancelling stops on the ramp, stays enabled and keeps that pose.
+    {
+        fc.home_motion.timeout_s = 5.0;
+        ModuleSet cset = make_set(m);
+        auto cft = std::make_shared<FrameTargetModule>("tool", fc);
+        REQUIRE(cset.add(cft));
+        REQUIRE(cset.configure());
+        Loop cl{m, cset, m->neutral()};
+        cl.step();
+        const Eigen::Isometry3d chome = pose_at(m, m->neutral(), "tool");
+        const Eigen::Isometry3d far = pose_at(m, arm_pose(m, 0.4), "tool");
+        REQUIRE(cft->set_target(far));
+        cl.step(800);
+        REQUIRE((pose_at(m, cl.q, "tool").translation() - far.translation()).norm() < 1e-3);
+        REQUIRE(cft->request_home());
+        const double span = (far.translation() - chome.translation()).norm();
+        for (int k = 0;
+             k < 2000 && (pose_at(m, cl.q, "tool").translation() - far.translation()).norm() < 0.3 * span;
+             ++k)
+            cl.step();
+        REQUIRE(cft->home_status() == HomeStatus::executing);
+        REQUIRE(cft->cancel_home());
+        cl.step();
+        CHECK(cft->home_status() == HomeStatus::cancelled);
+        CHECK(cft->enabled());
+        CHECK(cft->claim().joints == nullptr);
+        const Eigen::Isometry3d stopped = cft->target();
+        cl.step(300);
+        // A Cartesian ramp pose may lie off this 3-joint arm's reach, so check it settles near it, not exactly on it.
+        const Eigen::VectorXd settled = cl.q;
+        cl.step(100);
+        CHECK((cl.q - settled).norm() < 1e-6);
+        CHECK((cft->target().translation() - stopped.translation()).norm() < 1e-12);
+        CHECK((pose_at(m, cl.q, "tool").translation() - stopped.translation()).norm() < 0.05);
+        CHECK((stopped.translation() - chome.translation()).norm() > 0.05);
+        CHECK((stopped.translation() - far.translation()).norm() > 1e-3);
+        CHECK(cft->cancel_home());  // not homing: no-op
+        CHECK(cft->home_status() == HomeStatus::cancelled);
+        CHECK(cft->set_target(far));  // accepts targets again
+    }
+
     // Disabling aborts.
     REQUIRE(ft->request_home());
     loop.step();
@@ -1784,6 +1842,25 @@ TEST_CASE("joint_target module: home returns to the initial posture") {
     loop.step(2);
     CHECK(ft->running());
     CHECK_FALSE(jt->claiming());
+
+    // Cancelling stops on the profile and keeps the joints there (still enabled and claiming).
+    REQUIRE(jt->set_target(target));
+    while (!jt->settled()) loop.step();
+    REQUIRE(jt->request_home());
+    loop.step(20);
+    REQUIRE(jt->home_status() == HomeStatus::executing);
+    REQUIRE(jt->cancel_home());
+    loop.step();
+    CHECK(jt->home_status() == HomeStatus::cancelled);
+    CHECK(jt->enabled());
+    CHECK(jt->claiming());
+    const Eigen::VectorXd stopped = jt->target();
+    while (!jt->settled()) loop.step();
+    loop.step(50);
+    CHECK((jt->target() - stopped).norm() < 1e-12);
+    CHECK(std::abs(joint_q(m, loop.q, "j1") - stopped[0]) < 1e-2);
+    CHECK(std::abs(stopped[0] - 0.1) > 1e-2);
+    CHECK(std::abs(stopped[0] - 0.6) > 1e-2);
 
     // Disabling aborts a running home at once; a disabled module refuses to home.
     REQUIRE(jt->set_target(target));

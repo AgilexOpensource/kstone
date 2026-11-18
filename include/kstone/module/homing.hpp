@@ -17,11 +17,11 @@ struct HomeConfig {
     double timeout_s{2.0};        ///< > 0: times out after this long without progress toward home.
 };
 
-enum class HomeStatus { idle, waiting, executing, succeeded, timed_out, aborted };
+enum class HomeStatus { idle, waiting, executing, succeeded, timed_out, aborted, cancelled };
 KSTONE_EXPORT const char* to_string(HomeStatus value) noexcept;
 
 /// Homing state machine shared by modules; the module owns the home pose and the motion.
-/// idle/finished -request()-> waiting -start()-> executing -finish()-> succeeded | aborted | timed_out.
+/// idle/finished -request()-> waiting -start()-> executing -finish()-> succeeded | aborted | timed_out | cancelled.
 class KSTONE_EXPORT Homing {
   public:
     static Status validate(const HomeConfig& config);
@@ -37,8 +37,15 @@ class KSTONE_EXPORT Homing {
 
     /// No-op while active.
     void request() noexcept;
-    /// Call from every prepare(). Ends a running homing with aborted on a skipped step or Cycle::resynced,
-    /// with timed_out after timeout_s without progress. True if it ended in this call.
+    /// While active: the next update() ends it with cancelled (the module stops on its ramp and keeps the joints).
+    /// No-op otherwise.
+    void cancel() noexcept {
+        if (active()) cancel_ = true;
+    }
+    /// The motion toward home began (start() switched to executing) in the current or last run.
+    bool started() const noexcept { return started_; }
+    /// Call from every prepare(). Ends a running homing with cancelled after cancel(), with aborted on a skipped
+    /// step or Cycle::resynced, with timed_out after timeout_s without progress. True if it ended in this call.
     bool update(const Cycle& cycle) noexcept;
     /// While executing: report the remaining error to home; `arrived` (within tolerance) always counts as progress.
     /// An error more than progress_epsilon below the one at the last progress restarts the timeout.
@@ -58,6 +65,8 @@ class KSTONE_EXPORT Homing {
     std::uint64_t last_index_{0};
     bool prepared_{false};
     bool timing_{false};
+    bool cancel_{false};
+    bool started_{false};
 };
 
 }  // namespace kstone

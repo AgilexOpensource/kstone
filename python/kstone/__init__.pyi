@@ -363,7 +363,7 @@ class Module:
 
     @property
     def home_state(self) -> str | None:
-        """Homing progress: idle, waiting, executing, succeeded, timed_out or aborted; None if not homeable."""
+        """Homing progress: idle, waiting, executing, succeeded, timed_out, aborted or cancelled; None if not homeable."""
 
     @property
     def ports(self) -> list[dict[str, Any]]:
@@ -397,6 +397,9 @@ class Module:
 
     def home(self) -> None:
         """Start homing on the next step; watch home_state."""
+
+    def cancel_home(self) -> None:
+        """Stop a running homing on the next step where its ramp is; it keeps the joints (home_state cancelled). No-op if not homing."""
 
     @property
     def homeable(self) -> bool:

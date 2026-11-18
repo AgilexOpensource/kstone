@@ -185,6 +185,10 @@ Status Module::request_home() {
     return make_error(ErrorCode::unsupported, "module '" + id_ + "': cannot home");
 }
 
+Status Module::cancel_home() {
+    return make_error(ErrorCode::unsupported, "module '" + id_ + "': cannot home");
+}
+
 Status Module::tune(const ConfigNode&) {
     return make_error(ErrorCode::unsupported, "module '" + id_ + "': nothing to tune");
 }

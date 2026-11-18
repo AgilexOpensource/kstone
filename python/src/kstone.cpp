@@ -764,7 +764,8 @@ PYBIND11_MODULE(_core, m) {
                 const char* state = s.call([&] { return s.module->home_state(); });
                 return state ? py::object(py::str(state)) : py::object(py::none());
             },
-            "Homing progress: idle, waiting, executing, succeeded, timed_out or aborted; None if not "
+            "Homing progress: idle, waiting, executing, succeeded, timed_out, aborted or cancelled; None if "
+            "not "
             "homeable.")
         .def_property_readonly(
             "ports",
@@ -825,6 +826,10 @@ Example:
         .def(
             "home", [](const PyModule& s) { s.call([&] { check(s.module->request_home()); }); },
             "Start homing on the next step; watch home_state.")
+        .def(
+            "cancel_home", [](const PyModule& s) { s.call([&] { check(s.module->cancel_home()); }); },
+            "Stop a running homing on the next step where its ramp is; it keeps the joints (home_state "
+            "cancelled). No-op if not homing.")
         .def_property_readonly(
             "homeable", [](const PyModule& s) { return s.module->homeable(); },
             "Whether home() is supported.")
