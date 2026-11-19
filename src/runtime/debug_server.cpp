@@ -69,9 +69,9 @@ class Ring {
 using SteadyClock = std::chrono::steady_clock;
 
 constexpr int kProtocolVersion = 1;
-constexpr const char* kCommandOps[] = {"set_port",    "set_enabled", "home",  "tune",
-                                       "tune_solver", "pause",       "step",  "set_rate",
-                                       "tune_limits", "home_all",    "resync"};
+constexpr const char* kCommandOps[] = {
+    "set_port", "set_enabled", "home",        "cancel_home", "tune",   "tune_solver",    "pause",
+    "step",     "set_rate",    "tune_limits", "home_all",    "resync", "cancel_home_all"};
 constexpr double kMaxTimeoutS = 60.0;
 constexpr auto kAuthGrace = std::chrono::seconds(5);  // Unauthenticated connections are dropped after this.
 constexpr std::size_t kMinToken = 16;
@@ -81,6 +81,7 @@ enum class Op {
     set_port,
     set_enabled,
     home,
+    cancel_home,
     tune,
     tune_solver,
     pause,
@@ -88,7 +89,8 @@ enum class Op {
     set_rate,
     tune_limits,
     home_all,
-    resync
+    resync,
+    cancel_home_all
 };
 constexpr double kMaxStepCycles = 1e6;
 constexpr double kMaxRateHz = 1e4;
@@ -738,6 +740,9 @@ struct DebugServer::Impl {
                     case Op::home:
                         s = mods[c->module]->request_home();
                         break;
+                    case Op::cancel_home:
+                        s = mods[c->module]->cancel_home();
+                        break;
                     case Op::tune:
                         s = mods[c->module]->tune(c->params);
                         break;
@@ -761,6 +766,11 @@ struct DebugServer::Impl {
                         break;
                     case Op::home_all:
                         s = engine.modules().home_all();
+                        break;
+                    case Op::cancel_home_all:
+                        for (const auto& m : mods)
+                            if (m->homeable())
+                                if (Status e = m->cancel_home(); !e && s) s = e;
                         break;
                     case Op::resync:
                         s = engine.request_resync(c->group, c->enabled);
@@ -931,8 +941,8 @@ struct DebugServer::Impl {
             cmd.rate_hz = rate->as_number();
             return {};
         }
-        if (name == "home_all") {
-            cmd.op = Op::home_all;
+        if (name == "home_all" || name == "cancel_home_all") {
+            cmd.op = name == "home_all" ? Op::home_all : Op::cancel_home_all;
             return {};
         }
         if (name == "resync") {
@@ -963,7 +973,8 @@ struct DebugServer::Impl {
             cmd.params = *params;
             return {};
         }
-        if (name != "home" && name != "set_enabled" && name != "set_port" && name != "tune")
+        if (name != "home" && name != "cancel_home" && name != "set_enabled" && name != "set_port" &&
+            name != "tune")
             return make_error(ErrorCode::unsupported, "unknown op '" + name + "'");
         const ConfigNode* module = doc.find("module");
         if (module == nullptr || module->kind() != ConfigNode::Kind::string)
@@ -973,8 +984,8 @@ struct DebugServer::Impl {
         if (m == module_ids.size())
             return make_error(ErrorCode::not_found, "unknown module '" + module->as_string() + "'");
         cmd.module = m;
-        if (name == "home") {
-            cmd.op = Op::home;
+        if (name == "home" || name == "cancel_home") {
+            cmd.op = name == "home" ? Op::home : Op::cancel_home;
             return {};
         }
         if (name == "tune") {

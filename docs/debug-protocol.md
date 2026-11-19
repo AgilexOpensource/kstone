@@ -29,6 +29,7 @@ The debug server (`kstone run --serve`, `Engine.serve` or `DebugServer`) speaks 
 | `subscribe` | Set the `state` rate; 0 stops it |
 | `set_port`, `set_enabled`, `home` | Command a module; `set_port` with `labels` writes only those vector elements |
 | `home_all` | Home every homeable module currently in control (`ModuleSet::home_all`) |
+| `cancel_home`, `cancel_home_all` | Stop the homing of one module (`module`) or of every homeable module where it is (`Module::cancel_home`); no-op when not homing |
 | `tune`, `tune_solver`, `tune_limits` | Change module, solver or joint limit parameters |
 | `pause`, `step`, `set_rate` | Pause the engine, step while paused, change the control rate |
 | `resync` | Sync attached feedback groups to their measurement on the next unpaused cycle (`Engine::request_resync`). Optional `group` (a name from `state.groups`, default all) and `rebase` (default `true`: drop held targets so the command holds the measurement; `false`: keep them and move there from the measurement) |

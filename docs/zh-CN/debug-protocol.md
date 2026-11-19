@@ -31,6 +31,7 @@
 | `subscribe` | 设置 `state` 频率；0 停止 |
 | `set_port`、`set_enabled`、`home` | 控制模块；带 `labels` 的 `set_port` 只写这些 vector 元素 |
 | `home_all` | 让当前持有控制权的可回 home 模块全部回 home（`ModuleSet::home_all`） |
+| `cancel_home`、`cancel_home_all` | 让一个模块（`module`）或所有可回 home 模块的回 home 停在当前位置（`Module::cancel_home`）；未在回 home 时无操作 |
 | `tune`、`tune_solver`、`tune_limits` | 修改模块、求解器或关节限位参数 |
 | `pause`、`step`、`set_rate` | 暂停引擎、暂停时单步、修改控制频率 |
 | `resync` | 在下一个未暂停周期把已挂接的反馈组同步到实测（`Engine::request_resync`）。可选 `group`（`state.groups` 中的组名，默认全部）和 `rebase`（默认 `true`：丢弃保持的目标，命令停在实测位置；`false`：保留目标，从实测位置走过去） |

@@ -1002,6 +1002,47 @@ TEST_CASE("debug server: resync op validates its fields and reports group deviat
     (*server)->stop();
 }
 
+TEST_CASE("debug server: cancel_home ops stop a homing in place") {
+    auto e = load_engine(kFixtures / "arm_loopback.yaml");
+    REQUIRE(e);
+    DebugServerOptions options;
+    options.port = 0;
+    auto server = DebugServer::start(*e, options);
+    REQUIRE(server);
+    Client a((*server)->port());
+    a.read_type("model");
+
+    std::atomic<bool> stop{false};
+    std::thread runner([&] { CHECK(e->run(0.0, &stop)); });
+    a.read_type("state");
+    const auto home_of = [&](const char* id) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        for (;;) {
+            const ConfigNode st = a.read_type("state");
+            const ConfigNode* h = module_node(st, id)->find("home");
+            const std::string v = h ? h->as_string() : std::string();
+            if (v == "cancelled" || std::chrono::steady_clock::now() > deadline) return v;
+        }
+    };
+    a.send(R"({"op":"set_port","id":1,"module":"arm","port":"target","value":[0.5,-0.3,1.0]})");
+    CHECK(reply_to(a, 1).find("ok")->as_bool());
+    // Both land in the same control cycle, so the homing is cancelled before it can finish.
+    a.send(R"({"op":"home","id":2,"module":"arm"})");
+    a.send(R"({"op":"cancel_home","id":3,"module":"arm"})");
+    CHECK(reply_to(a, 2).find("ok")->as_bool());
+    CHECK(reply_to(a, 3).find("ok")->as_bool());
+    CHECK(home_of("arm") == "cancelled");
+
+    a.send(R"({"op":"home","id":4,"module":"tool"})");
+    a.send(R"({"op":"cancel_home_all","id":5})");
+    CHECK(reply_to(a, 4).find("ok")->as_bool());
+    CHECK(reply_to(a, 5).find("ok")->as_bool());  // non-homeable modules are skipped
+    CHECK(home_of("tool") == "cancelled");
+    stop = true;
+    runner.join();
+    (*server)->stop();
+}
+
 TEST_CASE("debug server: home_all op homes the modules in control") {
     auto e = load_engine(kFixtures / "arm_loopback.yaml");
     REQUIRE(e);
