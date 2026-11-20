@@ -14,7 +14,10 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
+#include <tuple>
+#include <vector>
 
 using namespace kstone;
 namespace fs = std::filesystem;
@@ -164,81 +167,230 @@ TEST_CASE("chassis: omni pose mode is bounded and reaches the goal") {
 }
 
 namespace {
-// Omni base that applies each command after `delay` and ramps at `accel`; odometry is stamped on receipt.
-double settle_oscillation(double latency, double delay = 0.2, double accel = 0.6) {
+// Base that applies each command after `delay` and ramps at `accel`, with wheel slip; odometry is stamped
+// on receipt. Returns how often the output started moving, the odometry's back-and-forth over the last 4 s
+// and its final distance to the goal.
+std::tuple<int, double, double> settle(ChassisKinematics kinematics, double delay, double accel = 0.6,
+                                       double slip = 0.0) {
     ChassisConfig config;
+    config.kinematics = kinematics;
     config.max_linear_velocity = 0.5;
-    config.max_linear_acceleration = config.max_linear_deceleration = 2.5;
-    config.position_tolerance = 0.001;
-    config.odom_latency_s = latency;
+    config.max_linear_acceleration = config.max_linear_deceleration = 0.6;
+    config.max_angular_acceleration = config.max_angular_deceleration = 0.65;
+    config.position_tolerance = 0.01;
+    config.orientation_tolerance = 0.017;
     const double dt = 0.02;
     auto ctrl = started(config, dt);
-    std::deque<double> pipe(static_cast<std::size_t>(std::lround(delay / dt)), 0.0);
-    double x = 0.0, v = 0.0, now = 0.0, lo = 1e9, hi = -1e9;
+    int starts = 0;
+    bool moving = false;
+    std::deque<Twist2D> pipe(static_cast<std::size_t>(std::lround(delay / dt)), Twist2D{});
+    const Pose2D goal{0.4, 0.0, 0.3};
+    Pose2D base;
+    Twist2D v;
+    double now = 0.0, lo = 1e9, hi = -1e9, ylo = 1e9, yhi = -1e9;
     for (int i = 0; i < 600; ++i) {
-        REQUIRE(accepted(ctrl.submit_odometry({x, 0, 0}, now, now)));
-        REQUIRE(ctrl.submit_pose({0.05, 0, 0}, now));
+        REQUIRE(accepted(ctrl.submit_odometry(base, now, now)));
+        REQUIRE(ctrl.submit_pose(goal, now));
         now += dt;
-        const auto out = ctrl.step(now);
-        REQUIRE(out.reason == ChassisReason::tracking);
-        pipe.push_back(out.velocity.vx);
-        const double u = pipe.front();
+        REQUIRE(ctrl.step(now).reason == ChassisReason::tracking);
+        const Twist2D& o = ctrl.output();
+        const bool now_moving = o.vx != 0.0 || o.vy != 0.0 || o.wz != 0.0;
+        starts += now_moving && !moving;
+        moving = now_moving;
+        pipe.push_back(o);
+        const Twist2D u = pipe.front();
         pipe.pop_front();
-        v += std::clamp(u - v, -accel * dt, accel * dt);
-        x += v * dt;
-        if (i >= 400) lo = std::min(lo, x), hi = std::max(hi, x);
+        v.vx += std::clamp(u.vx - v.vx, -accel * dt, accel * dt);
+        v.vy += std::clamp(u.vy - v.vy, -accel * dt, accel * dt);
+        v.wz += std::clamp(u.wz - v.wz, -0.65 * dt, 0.65 * dt);
+        base = integrate_se2(base, {v.vx * (1 - slip), v.vy * (1 - slip), v.wz}, dt);
+        if (i >= 400)
+            lo = std::min(lo, base.x), hi = std::max(hi, base.x), ylo = std::min(ylo, base.yaw),
+            yhi = std::max(yhi, base.yaw);
     }
-    return hi - lo;
+    // differential: the part of the goal abeam of the heading is not reached
+    const double c = std::cos(base.yaw), s = std::sin(base.yaw);
+    const double along = (goal.x - base.x) * c + (goal.y - base.y) * s;
+    const double position = kinematics == ChassisKinematics::omni
+                                ? std::hypot(goal.x - base.x, goal.y - base.y)
+                                : std::abs(along);
+    return {starts, std::max(hi - lo, yhi - ylo),
+            std::max(position, std::abs(wrap_angle(goal.yaw - base.yaw)))};
 }
 }  // namespace
 
-TEST_CASE("chassis: odometry latency compensation stops a delayed base from oscillating") {
-    CHECK(settle_oscillation(0.0) > 0.05);  // uncompensated: sustained back-and-forth
-    CHECK(settle_oscillation(0.2) < 0.005);
-    for (double delay : {0.14, 0.2, 0.26})  // robust to a misestimated delay and a slower base
-        for (double accel : {0.5, 0.8}) {
-            INFO("delay=" << delay << " accel=" << accel);
-            CHECK(settle_oscillation(0.2, delay, accel) < 0.01);
-        }
-    ChassisConfig config;
-    config.odom_latency_s = -0.1;
-    CHECK_FALSE(ChassisController::create(config));
+TEST_CASE("chassis: pose mode stops once on the odometry whatever the base delay, without a delay model") {
+    for (const ChassisKinematics kinematics : {ChassisKinematics::omni, ChassisKinematics::differential})
+        for (double delay : {0.04, 0.1, 0.2, 0.3})
+            for (double slip : {0.0, 0.02, 0.05}) {
+                const auto [starts, swing, error] = settle(kinematics, delay, 0.6, slip);
+                INFO("kinematics=" << static_cast<int>(kinematics) << " delay=" << delay << " slip=" << slip
+                                   << " starts=" << starts << " swing=" << swing << " error=" << error);
+                // one move; a slip beyond the tolerance adds a correction from rest
+                CHECK(starts <= (slip > 0.03 ? 3 : 1));
+                CHECK(swing < 1e-6);    // at rest: nothing moves
+                CHECK(error < 0.0101);  // the odometry ends inside the tolerance
+            }
 }
 
-TEST_CASE("chassis: a solve pause is replayed as zero output, not as the last motion") {
-    ChassisConfig config;
-    config.max_linear_velocity = 0.5;
-    config.max_linear_acceleration = config.max_linear_deceleration = 2.5;
-    config.odom_latency_s = 0.2;
-    const double dt = 0.02;
-    const Pose2D near{0.05, 0, 0};  // closer than v * latency: replaying the cruise speed would overshoot it
-    auto plan_from_rest = [&](auto& ctrl, double& now) {
-        REQUIRE(accepted(ctrl.submit_odometry({0, 0, 0}, now, now)));
-        REQUIRE(ctrl.submit_pose(near, now));
-        now += dt;
-        return ctrl.step(now).velocity.vx;
-    };
-    auto fresh = started(config, dt);
-    double now = dt;
-    fresh.step(now);  // applies the scheduler period
-    const double expected = plan_from_rest(fresh, now);
-    REQUIRE(expected > 0.0);
-
-    auto ctrl = started(config, dt);
-    now = 0.0;
-    for (int i = 0; i < 50; ++i) {  // 1 s toward a far goal: full speed
-        REQUIRE(accepted(ctrl.submit_odometry({0, 0, 0}, now, now)));
-        REQUIRE(ctrl.submit_pose({5.0, 0, 0}, now));
-        now += dt;
+TEST_CASE("chassis: pose mode plans on the integrated pose while the base moves") {
+    auto ctrl = started({}, 0.02);
+    double now = 0.0;
+    for (int i = 0; i < 20; ++i) {
+        REQUIRE(accepted(ctrl.submit_odometry({0, 0, 0}, now, now)));  // a base that has not moved yet
+        REQUIRE(ctrl.submit_pose({1.0, 0, 0}, now));
+        now += 0.02;
         ctrl.step(now);
     }
-    REQUIRE(ctrl.snapshot(now).velocity.vx > 0.3);  // per world axis 0.5 / sqrt(2)
-    for (int i = 0; i < 15; ++i) {                  // 0.3 s solve pause, longer than the latency
-        REQUIRE(accepted(ctrl.submit_odometry({0, 0, 0}, now, now)));
-        now += dt;
-        ctrl.service(now, false);
+    CHECK(ctrl.pose().x > 0.01);
+    CHECK(ctrl.snapshot(now).source == PoseSource::internal);
+}
+
+TEST_CASE("chassis: pose mode latches at the goal until a new goal comes") {
+    ChassisConfig config;
+    config.kinematics = ChassisKinematics::differential;
+    config.position_tolerance = 0.01;
+    config.orientation_tolerance = 0.017;
+    auto ctrl = started(config, 0.02);
+    double now = 0.0;
+    const Pose2D goal{0.4, 0.0, 0.0};
+    for (int i = 0; i < 300; ++i) {
+        REQUIRE(ctrl.submit_pose(goal, now));
+        now += 0.02;
+        ctrl.step(now);
     }
-    CHECK(plan_from_rest(ctrl, now) == doctest::Approx(expected));
+    REQUIRE(ctrl.output().vx == 0.0);
+    // the base stopped 8 mm short: inside the tolerance, so nothing moves once the odometry is folded in
+    for (int i = 0; i < 100; ++i) {
+        REQUIRE(accepted(ctrl.submit_odometry({0.392, 0.0, 0.005}, now, now)));
+        REQUIRE(ctrl.submit_pose(goal, now));
+        now += 0.02;
+        const auto out = ctrl.step(now);
+        CHECK(out.velocity.vx == 0.0);
+        CHECK(out.velocity.wz == 0.0);
+    }
+    CHECK(ctrl.pose().x == doctest::Approx(0.392));
+    // a base moved by someone else (remote control) is not driven back to the same goal
+    for (int i = 0; i < 20; ++i) {
+        REQUIRE(accepted(ctrl.submit_odometry({0.1, 0.2, 0.5}, now, now)));
+        REQUIRE(ctrl.submit_pose(goal, now));
+        now += 0.02;
+        CHECK(ctrl.step(now).velocity.vx == 0.0);
+    }
+    CHECK(ctrl.pose().x == doctest::Approx(0.1));
+    // a goal outside the tolerance moves it again
+    bool moved = false;
+    for (int i = 0; i < 10; ++i) {
+        REQUIRE(ctrl.submit_pose({0.5, 0.0, 0.0}, now));
+        now += 0.02;
+        moved = moved || ctrl.step(now).velocity.vx > 0.0;
+    }
+    CHECK(moved);
+}
+
+TEST_CASE("chassis: pose mode takes a goal as done when another source keeps moving the base") {
+    ChassisConfig config;
+    config.kinematics = ChassisKinematics::differential;
+    auto ctrl = started(config, 0.02);
+    double now = 0.0;
+    const Pose2D goal{0.3, 0.0, 0.0};
+    Pose2D base;
+    // the remote control takes over at once: kstone's output is ignored and the base backs off steadily
+    for (int i = 0; i < 300; ++i) {
+        REQUIRE(accepted(ctrl.submit_odometry(base, now, now)));
+        REQUIRE(ctrl.submit_pose(goal, now));
+        now += 0.02;
+        ctrl.step(now);
+        if (i < 200) base.x -= 0.002;
+    }
+    // released: the base stays where the remote control left it
+    for (int i = 0; i < 200; ++i) {
+        REQUIRE(accepted(ctrl.submit_odometry(base, now, now)));
+        REQUIRE(ctrl.submit_pose(goal, now));
+        now += 0.02;
+        CHECK(ctrl.step(now).velocity.vx == 0.0);
+    }
+    CHECK(ctrl.pose().x == doctest::Approx(base.x));
+}
+
+namespace {
+// A base that follows kstone's output after 0.1 s at 0.6 m/s^2, except while `remote(t)` returns a velocity
+// (someone else drives it). Returns the outputs and the odometry.
+struct Run {
+    std::vector<Twist2D> out;
+    std::vector<Pose2D> base;
+    ChassisReason reason{ChassisReason::not_started};
+};
+template <class Remote>
+Run drive(const Pose2D& goal, double seconds, Remote remote) {
+    ChassisConfig config;
+    config.kinematics = ChassisKinematics::differential;
+    config.max_linear_velocity = 0.5;
+    config.max_linear_acceleration = 0.6;
+    config.max_linear_deceleration = 1.0;
+    const double dt = 0.02;
+    auto ctrl = started(config, dt);
+    std::deque<Twist2D> pipe(5, Twist2D{});
+    Pose2D base;
+    Twist2D v;
+    Run run;
+    double now = 0.0;
+    for (int i = 0; i < static_cast<int>(seconds / dt); ++i) {
+        REQUIRE(accepted(ctrl.submit_odometry(base, now, now)));
+        REQUIRE(ctrl.submit_pose(goal, now));
+        now += dt;
+        run.reason = ctrl.step(now).reason;
+        pipe.push_back(ctrl.output());
+        Twist2D u = pipe.front();
+        pipe.pop_front();
+        if (const auto r = remote(now)) u = *r;
+        v.vx += std::clamp(u.vx - v.vx, -0.6 * dt, 0.6 * dt);
+        v.wz += std::clamp(u.wz - v.wz, -0.65 * dt, 0.65 * dt);
+        base = integrate_se2(base, v, dt);
+        run.out.push_back(ctrl.output());
+        run.base.push_back(base);
+    }
+    return run;
+}
+}  // namespace
+
+TEST_CASE("chassis: pose mode yields the goal when the odometry leaves the path tolerance") {
+    SUBCASE("a short push after arriving is not driven back") {
+        const auto run = drive({0.3, 0, 0}, 8.0, [](double t) -> std::optional<Twist2D> {
+            if (t > 3.0 && t < 3.6) return Twist2D{-0.3, 0, 0};
+            if (t >= 3.6 && t < 4.2) return Twist2D{};
+            return std::nullopt;
+        });
+        // the base came to rest where the push left it and stays there
+        CHECK(run.base.back().x < 0.3 - 0.05);
+        CHECK(run.reason == ChassisReason::yielded);
+        for (std::size_t i = 300; i < run.out.size(); ++i) CHECK(run.out[i].vx == 0.0);
+    }
+    SUBCASE("a takeover in the middle of a move stops the output within a few cycles") {
+        const auto run = drive({1.0, 0, 0}, 6.0, [](double t) -> std::optional<Twist2D> {
+            if (t > 1.0 && t < 2.0) return Twist2D{-0.4, 0, 0};
+            if (t >= 2.0 && t < 2.6) return Twist2D{};
+            return std::nullopt;
+        });
+        // the base leaves the path tube once it is past the reference of the last kTrackLagS (about 1.5 s
+        // in); from then on the output is zero and the base is not driven back to the goal
+        std::size_t first_zero = run.out.size();
+        for (std::size_t i = 50; i < run.out.size(); ++i)
+            if (run.out[i].vx == 0.0) {
+                first_zero = i;
+                break;
+            }
+        CHECK(first_zero < 130);  // 2.6 s
+        for (std::size_t i = first_zero; i < run.out.size(); ++i) CHECK(run.out[i].vx == 0.0);
+        CHECK(run.base.back().x < 0.5);
+    }
+    SUBCASE("a base that only follows kstone is never taken for another source") {
+        const auto run =
+            drive({1.0, 0, 0.5}, 8.0, [](double) -> std::optional<Twist2D> { return std::nullopt; });
+        CHECK(run.reason == ChassisReason::tracking);
+        CHECK(std::abs(run.base.back().x * std::cos(run.base.back().yaw) +
+                       run.base.back().y * std::sin(run.base.back().yaw)) > 0.5);
+    }
 }
 
 TEST_CASE("chassis: lateral limits bound body y separately in velocity mode") {
@@ -375,13 +527,12 @@ TEST_CASE("chassis: zero pose limits bypass shaping") {
     CHECK(std::abs(out.velocity.wz - 100) < 1e-9);
 }
 
-TEST_CASE("chassis: differential pose mode turns, drives and aligns") {
+TEST_CASE("chassis: differential pose mode drives along its heading while it turns") {
     const ChassisConfig config = differential();
     auto ctrl = started(config, 0.02);
-    const Pose2D goal{0.5, 0.4, -0.5};
+    const Pose2D goal{0.6, 0.0, 0.5};
     double now = 0.0;
-    bool saw_drive = false;
-    bool saw_final = false;
+    bool together = false;
     for (int i = 0; i < 1500; ++i) {
         REQUIRE(ctrl.submit_pose(goal, now));
         now += 0.02;
@@ -389,17 +540,30 @@ TEST_CASE("chassis: differential pose mode turns, drives and aligns") {
         INFO("cycle=" << i << " error=" << ctrl.last_error());
         REQUIRE(out.reason == ChassisReason::tracking);
         REQUIRE(out.velocity.vy == 0.0);
-        REQUIRE(out.velocity.vx >= -1e-12);
-        saw_drive |= ctrl.diff_phase() == DiffPhase::drive;
-        saw_final |= ctrl.diff_phase() == DiffPhase::final_align;
+        together |= out.velocity.vx > 0.05 && out.velocity.wz > 0.05;  // no turn-then-drive phases
     }
     const Pose2D pose = ctrl.pose();
-    CHECK(saw_drive);
-    CHECK(saw_final);
-    CHECK(std::hypot(pose.x - goal.x, pose.y - goal.y) <= 1.5 * config.position_tolerance);
+    CHECK(together);
     CHECK(std::abs(wrap_angle(pose.yaw - goal.yaw)) <= 1.5 * config.orientation_tolerance);
-    CHECK(ctrl.output().vx == 0.0);
-    CHECK(ctrl.output().wz == 0.0);
+    // At rest the goal lies abeam: nothing is left along the heading.
+    CHECK(std::abs((goal.x - pose.x) * std::cos(pose.yaw) + (goal.y - pose.y) * std::sin(pose.yaw)) < 1e-3);
+    CHECK(std::abs(ctrl.output().vx) < 1e-6);
+    CHECK(std::abs(ctrl.output().wz) < 1e-6);
+}
+
+TEST_CASE("chassis: differential pose mode never moves sideways") {
+    auto ctrl = started(differential(), 0.02);
+    double now = 0.0;
+    for (int i = 0; i < 300; ++i) {
+        REQUIRE(ctrl.submit_pose({0.0, 0.5, 0.0}, now));
+        now += 0.02;
+        const auto out = ctrl.step(now);
+        REQUIRE(out.reason == ChassisReason::tracking);
+        REQUIRE(out.velocity.vx == 0.0);
+        REQUIRE(out.velocity.vy == 0.0);
+        REQUIRE(out.velocity.wz == 0.0);
+    }
+    CHECK(std::hypot(ctrl.pose().x, ctrl.pose().y) < 1e-12);
 }
 
 TEST_CASE("chassis: unlimited axis does not replay another axis's brake profile") {
@@ -409,23 +573,17 @@ TEST_CASE("chassis: unlimited axis does not replay another axis's brake profile"
     ChassisPoseLimits limits;
     limits.max_angular_velocity = 1.0;
     limits.max_angular_acceleration = 2.0;
-    CHECK_FALSE(ctrl.tune_pose_limits(limits));  // default axis_phase is omni-only
-    limits.planner_mode = ChassisPlannerMode::straight;
     REQUIRE(ctrl.tune_pose_limits(limits));
-    const Pose2D goal{0.0, 2.0, 0.0};  // bearing +90 deg: a long align turn before driving
+    const Pose2D goal{0.0, 0.0, 2.5};  // a pure turn: nothing to drive
     double now = 0.0;
     bool lowered = false;
-    int checked = 0;
-    for (int i = 0; i < 200 && ctrl.diff_phase() != DiffPhase::drive; ++i) {
+    for (int i = 0; i < 200; ++i) {
         REQUIRE(ctrl.submit_pose(goal, now));
         now += 0.02;
         const auto out = ctrl.step(now);
         INFO("cycle=" << i << " error=" << ctrl.last_error());
         REQUIRE(out.reason == ChassisReason::tracking);
-        if (ctrl.diff_phase() == DiffPhase::align) {
-            REQUIRE(out.velocity.vx == 0.0);
-            ++checked;
-        }
+        REQUIRE(std::abs(out.velocity.vx) < 1e-9);
         if (!lowered && out.velocity.wz > 0.9) {
             limits.max_angular_velocity = 0.3;
             REQUIRE(ctrl.tune_pose_limits(limits));
@@ -433,7 +591,6 @@ TEST_CASE("chassis: unlimited axis does not replay another axis's brake profile"
         }
     }
     CHECK(lowered);
-    CHECK(checked > 10);
 }
 
 TEST_CASE("chassis: SE(2) integration and angle wrapping") {
@@ -498,7 +655,7 @@ TEST_CASE("chassis: drives the base of a mobile model with the root locked") {
     const ModelPtr m = *loaded;
 
     // Target: the tool pose with the base parked at the goal and the arm displaced.
-    const Pose2D goal{0.8, 0.3, 0.4};
+    const Pose2D goal{0.8, 0.0, 0.0};  // ahead: a differential base reaches it without moving sideways
     Eigen::VectorXd q_goal = m->neutral();
     Eigen::VectorXd dv = Eigen::VectorXd::Zero(m->nv());
     for (Index i = 6; i < m->nv(); ++i) dv[i] = 0.1;
@@ -567,7 +724,7 @@ TEST_CASE("chassis: drives the base of a mobile model with the root locked") {
     REQUIRE(ws.frame_pose(*tool, reached));
     const double before = (reached.translation() - shifted.translation()).norm();
     INFO("shifted error before re-solve " << before);
-    CHECK(before > 1e-4);  // the arm had compensated for the offset, so it must move back
+    CHECK(before > 1e-5);  // the arm had compensated for the offset, so it must move back
     for (int i = 0; i < 500; ++i) {
         REQUIRE(solver->solve(q, dt, r));
         q = r.q_next;

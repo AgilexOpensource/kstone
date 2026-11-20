@@ -1686,7 +1686,6 @@ Status ChassisModule::configure(ModuleSetup& setup) {
     declare_output({"command_priority", OutputType::number});
     declare_output({"command_fresh", OutputType::flag});
     declare_output({"source", OutputType::text});
-    declare_output({"phase", OutputType::text});
     return setup.set_driven(std::move(locked));
 }
 
@@ -1786,9 +1785,6 @@ Status ChassisModule::read_output(std::size_t index, OutputValue& out) const {
             break;
         case 19:
             out.text = to_string(output_.source);
-            break;
-        case 20:
-            out.text = to_string(controller_->diff_phase());
             break;
         default:
             return Module::read_output(index, out);

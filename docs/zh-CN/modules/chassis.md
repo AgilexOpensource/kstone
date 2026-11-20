@@ -22,10 +22,9 @@
 - `max_linear_velocity`、`max_angular_velocity` 及对应的 `*_acceleration`、`*_deceleration`：上限。速度方向与剩余位移相反时按减速度上限刹车。不限 jerk，加速度的平滑由底盘固件完成。速度模式只把指令限在速度上限内（加减速由底盘自己完成）；位姿模式的初始限制取全部这些值。
 - `max_lateral_velocity`、`max_lateral_acceleration`、`max_lateral_deceleration`（默认 0，即取对应的 `max_linear_*`）：全向底盘车体 y 方向的上限，用于侧移比前后弱的底盘。此时 `max_linear_*` 只管车体 x，平移限制在椭圆 $(v_x/x_{max})^2 + (v_y/y_{max})^2 \le 1$ 内（两者相等时就是平面合速度）。
 - `position_tolerance`、`orientation_tolerance`：到达判定，默认 0.01 m、0.02 rad。
-- `odom_latency_s`（默认 0，关闭）：只用于全向底盘位姿模式，表示底盘的响应延迟。里程计只反映其时间戳之前这么久以前发出的输出，所以规划前把之后发出的输出叠加到里程计上。不设置时，指令生效较慢的底盘会冲过目标，在目标附近来回运动。可用一次速度阶跃（指令到里程计）测得。
-- `target_position_deadband`、`target_orientation_deadband`：差速底盘下，目标变化小于这个量时沿用当前路径。
+- 位姿模式下的里程计：底盘执行 Ruckig 轨迹，规划基于自身参考位姿，运动中不被里程计覆盖，因此与底盘从指令到里程计的延迟无关（对延迟的里程计做反馈会过冲）。里程计与参考轨迹的偏离判断参照 ros2_control joint_trajectory_controller：运动中里程计须落在最近 1 s 内某一时刻参考位姿的 0.1 m / 0.2 rad 范围内（允许底盘最多滞后 1 s）；超出即说明有其他控制源（遥控器、外力），目标视为已完成，停在底盘所在位置（reason 为 `yielded`，到位后被挪离也是；持续发送目标的客户端应随之跟随底盘，直到发出新目标）。轨迹结束时若在容差内即锁存到位：输出保持为零、位姿跟随里程计，直到来了偏离锁存目标超过容差的新目标（同 Nav2 stateful goal checker），不会以底盘跟不上的低速反复微调，之后被挪动也不会开回去。若在容差外（打滑、底盘滞后或冲过），待里程计静止 0.2 s 后再规划剩余误差。非位姿模式下位姿直接跟随里程计。
 - `command_timeout_s`（默认 0.25）：指令超过这么久没更新就清除运动，reason 为 `command_timeout`，不算 fault。
-- 里程计超时：取引擎的 `feedback_timeout_s`（0 = 里程计永不过期）。比这更旧的里程计被拒收。最近一次里程计未过期时位姿保持该值，过期后用输出速度推算位姿。
+- 里程计超时：取引擎的 `feedback_timeout_s`（0 = 里程计永不过期）。比这更旧的里程计被拒收。非位姿模式（或位姿模式已锁存到位）下，最近一次里程计未过期时位姿保持该值，过期后用输出速度推算位姿。
 - 底盘从第一个周期的根节点位姿开始（在引擎上即机器人初始状态）。引擎带 rebase 的重新同步覆盖根节点时（例如包含根节点的分组同步时），底盘位姿重置为测得的根节点位姿。
 - `max_dt_s`（0.1）、`allowed_missed_cycles`（2）：两次 step 间隔超过 `max(max_dt_s, 周期 × allowed_missed_cycles)` 时进入 fault（`scheduler_discontinuity`）。只有跳过一步（禁用后再启用）或覆盖根节点的引擎重新同步才会重新同步并恢复。
 
@@ -35,9 +34,10 @@
 
 位姿模式的运行时限制：`max_linear_velocity`、`max_linear_acceleration`、`max_linear_deceleration`、`max_lateral_*`（0 = 取对应的 linear 值）及对应的 `max_angular_*` 字段，0 = 不限；全为 0 时直接输出未整形的速度。`planner_mode`：
 
-- `axis_phase`（默认）：全向底盘 x/y/yaw 相位同步，不能同步时退回时间同步。
-- `axis_time`：全向底盘时间同步。
-- `straight`：只用于差速，原地对准、直线行驶、终点对准。
+- `axis_phase`（默认）：各轴相位同步，不能同步时退回时间同步。
+- `axis_time`：各轴时间同步。
+
+全向底盘的轴是世界系 x/y/yaw。差速底盘的轴是沿当前朝向的距离和 yaw：边走边转，不横移，目标在朝向侧方的部分不追。
 
 ## 生命周期
 
@@ -71,12 +71,12 @@ ch.tune({"pose_limits": {"max_linear_velocity": 0.3, "planner_mode": "axis_time"
 - `planned`：轨迹当前位姿。`target`：位姿目标，非位姿模式为 NaN。
 - `active`、`fault`、`state`、`reason`：状态及原因。
 - `command`（指令来源）、`command_mode`、`command_priority`、`command_fresh`。
-- `source`：位姿来源（内部推算或里程计）。`phase`：差速位姿模式的阶段。
+- `source`：位姿来源（内部推算或里程计）。
 
 ## 常见坑
 
 - 速度指令是租约，停止写入后 `command_timeout_s` 内底盘停下。遥控要按固定频率持续写。
 - `pose_limits` 只影响位姿模式，速度模式始终用 `chassis` 里的 `max_*_velocity`。tune 时不检查是否超过这些上限，要自己保证不超过底盘能力。
-- `straight` 只能配 `differential`，`axis_*` 只能配 `omni`，其他组合会被拒。
+- 差速底盘位姿模式到不了正侧方的目标，调用方要先把底盘转向目标。
 - 里程计时间戳比当前时间早引擎 `feedback_timeout_s` 以上会被拒收，不报错，位姿只靠推算。实机要检查里程计和控制器时钟是否一致。
 - 调试时暂停进程或单步过久会触发 `scheduler_discontinuity` fault，底盘停住，把模块禁用再启用即可恢复。

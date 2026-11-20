@@ -27,10 +27,8 @@ struct Twist2D {
 
 enum class ChassisKinematics { omni, differential };
 enum class ChassisState { configured, active, paused, fault, stopped };
-/// Omni pose tracking: axis_phase = phase-synchronised (time fallback), axis_time = time-synchronised.
-/// straight (differential only): align -> straight drive -> final_align. Other kinematics/mode pairs are rejected.
-enum class ChassisPlannerMode { axis_phase, axis_time, straight };
-enum class DiffPhase { align, drive, final_align, path_error };
+/// Pose tracking: axis_phase = phase-synchronised (time fallback), axis_time = time-synchronised.
+enum class ChassisPlannerMode { axis_phase, axis_time };
 enum class PoseSource { internal, odometry };
 enum class ChassisReason {
     not_started,
@@ -43,25 +41,19 @@ enum class ChassisReason {
     scheduler_discontinuity,
     tracking,
     trajectory_error,  ///< Ruckig failed; see ChassisController::last_error().
-    path_error,        ///< Differential straight segment ended outside the position tolerance.
+    yielded,  ///< The odometry left the pose path (another source moved the base); goal taken as done.
 };
 
 KSTONE_EXPORT const char* to_string(ChassisKinematics value) noexcept;
 KSTONE_EXPORT const char* to_string(ChassisState value) noexcept;
 KSTONE_EXPORT const char* to_string(ChassisPlannerMode value) noexcept;
-KSTONE_EXPORT const char* to_string(DiffPhase value) noexcept;
 KSTONE_EXPORT const char* to_string(PoseSource value) noexcept;
 KSTONE_EXPORT const char* to_string(ChassisReason value) noexcept;
 
 struct ChassisConfig {
     ChassisKinematics kinematics{ChassisKinematics::omni};
-    double target_position_deadband{0.0};  ///< Differential: goal moves below this keep the current path.
-    double target_orientation_deadband{0.0};
     double odom_timeout_s{
         0.25};  ///< 0 = odometry never goes stale. The chassis module uses the engine feedback_timeout_s.
-    double odom_latency_s{
-        0.0};  ///< Omni pose mode: base response delay; outputs sent since then are replayed
-               ///< onto the odometry before planning (0 = off).
     double command_timeout_s{0.25};
     double max_dt_s{0.1};
     int allowed_missed_cycles{2};
@@ -130,7 +122,7 @@ KSTONE_EXPORT Eigen::Isometry3d chassis_root_pose(
     const Pose2D& center, const Eigen::Isometry3d& center_in_root = Eigen::Isometry3d::Identity());
 
 /// Planar base controller outside the QP: velocity/pose command leases with priority arbitration,
-/// Ruckig pose tracking (omni: synchronised x/y/yaw; differential: align -> drive -> final_align),
+/// Ruckig pose tracking (synchronised x/y/yaw; differential: the position error along the current heading only),
 /// dead reckoning and odometry override. Every method takes the controller clock `now` explicitly.
 /// Lock the root velocity coordinates in SolverOptions::locked and write pose() into q each cycle.
 class KSTONE_EXPORT ChassisController {
@@ -186,7 +178,6 @@ class KSTONE_EXPORT ChassisController {
     const Pose2D& ramp_pose() const noexcept;
     const Twist2D& output() const noexcept;
     const Twist2D& nominal_target() const noexcept;
-    DiffPhase diff_phase() const noexcept;
     double maximum_scheduler_dt() const noexcept;
 
   private:

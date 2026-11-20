@@ -47,8 +47,6 @@ modules:
       max_angular_deceleration: 5.0
       position_tolerance: 0.001
       orientation_tolerance: 0.002
-      target_position_deadband: 0.02
-      target_orientation_deadband: 0.035
   waist:
     type: frame_target
     frame: torso_link_4

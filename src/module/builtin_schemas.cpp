@@ -423,11 +423,6 @@ ParamSchema<ChassisConfig> chassis_config() {
     ParamSchema<C> s("Chassis controller.");
     s.field("kinematics", &C::kinematics,
             {{"omni", ChassisKinematics::omni}, {"differential", ChassisKinematics::differential}});
-    s.field("target_position_deadband", &C::target_position_deadband).at_least(0);
-    s.field("target_orientation_deadband", &C::target_orientation_deadband).at_least(0);
-    s.field("odom_latency_s", &C::odom_latency_s)
-        .at_least(0)
-        .doc("Omni pose mode: base response delay compensated on the odometry (0 = off).");
     s.field("command_timeout_s", &C::command_timeout_s).above(0);
     s.field("max_dt_s", &C::max_dt_s).above(0);
     s.field("allowed_missed_cycles", &C::allowed_missed_cycles).at_least(0);
@@ -465,9 +460,7 @@ ParamSchema<ChassisPoseLimits> chassis_pose_limits() {
     s.field("max_angular_acceleration", &C::max_angular_acceleration).at_least(0).tunable();
     s.field("max_angular_deceleration", &C::max_angular_deceleration).at_least(0).tunable();
     s.field("planner_mode", &C::planner_mode,
-            {{"axis_phase", ChassisPlannerMode::axis_phase},
-             {"axis_time", ChassisPlannerMode::axis_time},
-             {"straight", ChassisPlannerMode::straight}})
+            {{"axis_phase", ChassisPlannerMode::axis_phase}, {"axis_time", ChassisPlannerMode::axis_time}})
         .tunable();
     return s;
 }

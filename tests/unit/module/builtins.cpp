@@ -1142,7 +1142,7 @@ TEST_CASE("chassis module: locks the root and writes the controller pose") {
 
     Loop loop{m, set, m->neutral()};
     loop.dt = 0.02;
-    const Pose2D goal{0.8, 0.3, 0.4};
+    const Pose2D goal{0.8, 0.0, 0.0};
     for (int i = 0; i < 1500; ++i) {
         REQUIRE(ch->controller()->submit_pose(goal, loop.now));
         loop.step();
@@ -1277,7 +1277,7 @@ TEST_CASE("chassis module: velocity port lapses and outputs follow the controlle
     CHECK(port.lower[1] == 0.0);
     CHECK(port.upper[1] == 0.0);
     CHECK(port.upper[0] == ChassisConfig{}.max_linear_velocity);
-    REQUIRE(ch->outputs().size() == 21);
+    REQUIRE(ch->outputs().size() == 20);
     CHECK(ch->outputs()[6].name == "active");
     CHECK(ch->outputs()[13].name == "state");
     CHECK(ch->outputs()[13].type == OutputType::text);
@@ -1325,18 +1325,18 @@ TEST_CASE("chassis module: velocity port lapses and outputs follow the controlle
     ConfigNode t = ch->tunables();
     CHECK(t.find("pose_limits")->find("max_linear_velocity")->as_number() ==
           ChassisConfig{}.max_linear_velocity);
-    CHECK(t.find("pose_limits")->find("planner_mode")->as_string() == "straight");
+    CHECK(t.find("pose_limits")->find("planner_mode")->as_string() == "axis_phase");
     ConfigNode lim = ConfigNode::map();
     lim.set("max_linear_velocity", 0.3);
-    lim.set("planner_mode", std::string("axis_time"));
+    lim.set("planner_mode", std::string("straight"));
     ConfigNode patch = ConfigNode::map();
     patch.set("pose_limits", lim);
-    CHECK_FALSE(ch->tune(patch));  // omni-only mode on a differential base
-    lim.set("planner_mode", std::string("straight"));
+    CHECK_FALSE(ch->tune(patch));  // the turn-drive-turn planner is gone
+    lim.set("planner_mode", std::string("axis_time"));
     patch.set("pose_limits", lim);
     REQUIRE(ch->tune(patch));
     CHECK(ch->controller()->pose_limits().max_linear_velocity == 0.3);
-    CHECK(ch->controller()->pose_limits().planner_mode == ChassisPlannerMode::straight);
+    CHECK(ch->controller()->pose_limits().planner_mode == ChassisPlannerMode::axis_time);
     lim.set("max_linear_velocity", -1.0);
     patch.set("pose_limits", lim);
     CHECK_FALSE(ch->tune(patch));
