@@ -11,7 +11,7 @@ Planar base controller running outside the QP. It locks the free-flyer root and 
 | `velocity` | vector `[vx, vy, wz]` | Body-frame velocity |
 | `pose_target` | vector `[x, y, yaw]` | Pose target in the world |
 
-Both ports lapse after `command_timeout_s`. The last one written is submitted on the next step with source `port`.
+Both ports lapse after `command_timeout_s`; whatever was written since the last step is submitted with source `port`. `velocity` outranks `pose_target`: while a velocity stream is fresh (rewritten within the timeout) a pose target is dropped, and it is picked up again from the base's current pose once the stream stops. A zero velocity stream holds the base just like any other, so a teleoperator that is not driving must stop publishing rather than publish zeros.
 
 ## Key parameters
 
@@ -76,6 +76,7 @@ ch.tune({"pose_limits": {"max_linear_velocity": 0.3, "planner_mode": "axis_time"
 ## Pitfalls
 
 - A velocity command is a lease: once writes stop, the base stops within `command_timeout_s`. Teleoperation must write at a fixed rate.
+- A pose target is a lease too, and a fresh velocity stream overrides it: rewriting both at once keeps the base in velocity mode and never reaches the goal.
 - `pose_limits` affects pose mode only; velocity mode always uses the `max_*_velocity` values in `chassis`. A tune does not check them against those maxima, so keep them within what the base can do.
 - A differential base in pose mode cannot reach a goal beside it; the caller must turn it towards such goals first.
 - Odometry stamped more than the engine `feedback_timeout_s` before now is rejected silently and the pose relies on dead reckoning alone. On hardware, check that the odometry and controller clocks agree.

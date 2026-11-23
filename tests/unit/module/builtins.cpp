@@ -1398,6 +1398,80 @@ TEST_CASE("chassis module: pose_target port drives the base to the goal and laps
     CHECK(read.vector.isApprox(Eigen::Vector3d(now.x, now.y, now.yaw)));
 }
 
+TEST_CASE("chassis module: velocity outranks pose_target whichever port is written last") {
+    ModelOptions o;
+    o.root = RootJoint::free_flyer;
+    ModelPtr m = load("diff_chassis.urdf", o);
+    ModuleSet set = make_set(m);
+    ChassisModuleConfig cc;
+    cc.chassis.kinematics = ChassisKinematics::differential;
+    cc.period_s = 0.02;
+    auto ch = std::make_shared<ChassisModule>("chassis", cc);
+    REQUIRE(set.add(ch));
+    REQUIRE(set.configure());
+
+    Loop loop{m, set, m->neutral()};
+    loop.dt = 0.02;
+    PortValue goal, cmd;
+    goal.vector = Eigen::Vector3d(0.6, 0.0, 0.0);
+    cmd.vector = Eigen::Vector3d(0.1, 0.0, 0.0);
+    for (int i = 0; i < 3; ++i) {
+        REQUIRE(ch->write_port(1, goal));
+        REQUIRE(ch->write_port(0, cmd));
+        loop.step();
+    }
+    CHECK_FALSE(ch->controller()->command_snapshot().pose_mode);
+    CHECK(ch->controller()->command_snapshot().priority == kChassisVelocityPriority);
+    // Reverse write order in one cycle: the arbitration follows the priority, not the write order.
+    REQUIRE(ch->write_port(0, cmd));
+    REQUIRE(ch->write_port(1, goal));
+    loop.step();
+    CHECK_FALSE(ch->controller()->command_snapshot().pose_mode);
+    CHECK(ch->controller()->command_snapshot().priority == kChassisVelocityPriority);
+    // The dropped goal is not reported as the pose target.
+    PortValue read;
+    REQUIRE(ch->read_port(1, read));
+    const Pose2D p = ch->controller()->pose();
+    CHECK(read.vector.isApprox(Eigen::Vector3d(p.x, p.y, p.yaw)));
+    CHECK(p.x > 0.0);
+}
+
+TEST_CASE("chassis module: pose_target resumes once the velocity stream goes quiet") {
+    ModelOptions o;
+    o.root = RootJoint::free_flyer;
+    ModelPtr m = load("diff_chassis.urdf", o);
+    ModuleSet set = make_set(m);
+    ChassisModuleConfig cc;
+    cc.chassis.kinematics = ChassisKinematics::differential;
+    cc.period_s = 0.02;
+    auto ch = std::make_shared<ChassisModule>("chassis", cc);
+    REQUIRE(set.add(ch));
+    REQUIRE(set.configure());
+
+    Loop loop{m, set, m->neutral()};
+    loop.dt = 0.02;
+    PortValue goal, cmd;
+    goal.vector = Eigen::Vector3d(0.5, 0.0, 0.0);
+    cmd.vector = Eigen::Vector3d::Zero();
+    // A zero velocity stream holds the base too: that is why an idle teleoperator has to stop publishing.
+    for (int i = 0; i < 20; ++i) {
+        REQUIRE(ch->write_port(1, goal));
+        REQUIRE(ch->write_port(0, cmd));
+        loop.step();
+    }
+    CHECK_FALSE(ch->controller()->command_snapshot().pose_mode);
+    CHECK(ch->controller()->pose().x == doctest::Approx(0.0).epsilon(1e-9));
+
+    // Once the velocity stream stops, the goal is picked up again from where the base is.
+    for (int i = 0; i < 400; ++i) {
+        REQUIRE(ch->write_port(1, goal));
+        loop.step();
+    }
+    CHECK(ch->controller()->command_snapshot().pose_mode);
+    CHECK(ch->controller()->command_snapshot().priority == kChassisPosePriority);
+    CHECK(ch->controller()->pose().x == doctest::Approx(0.5).epsilon(1e-2));
+}
+
 namespace {
 bool active(const SolveResult& out, const std::string& task) {
     for (const auto& r : out.residuals)

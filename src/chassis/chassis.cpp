@@ -714,6 +714,7 @@ struct ChassisController::Impl {
         const double wz = std::clamp(nominal.wz, -c.max_angular_velocity, c.max_angular_velocity);
         out = {vx * scale, vy * scale, wz};
         planned_velocity = out;
+        ramp = pose;  // no trajectory in velocity mode: the planned pose is where the base is
         // Velocity mode has no acceleration state; handing its step rate to pose mode overshoots.
         out_acceleration = Twist2D{};
         output_valid_until = *command_stamp + c.command_timeout_s;
@@ -823,7 +824,13 @@ Result<bool> ChassisController::submit_velocity(const Twist2D& twist, double now
         return std::move(status).error();
     if (!m.accept_command(now, source, priority)) return false;
     m.target = twist;
-    m.pose_target.reset();
+    if (m.pose_target) {  // a velocity command takes over a pose goal: drop its trajectory state with it
+        m.pose_target.reset();
+        m.ramp = m.pose;
+        m.planned_pose_override.reset();
+        m.history_size = 0;
+        // `arrived` is kept: a goal reached before the base was driven away is not chased again.
+    }
     return true;
 }
 

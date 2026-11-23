@@ -11,7 +11,7 @@
 | `velocity` | vector `[vx, vy, wz]` | 车体系速度 |
 | `pose_target` | vector `[x, y, yaw]` | 世界系位姿目标 |
 
-两个端口都在 `command_timeout_s` 后失效。最后写入的那个在下一次 step 以来源 `port` 提交。
+两个端口都在 `command_timeout_s` 后失效。自上次 step 以来写入的内容都以来源 `port` 提交。`velocity` 优先于 `pose_target`：速度流保持新鲜（在超时内持续重写）时位姿目标会被丢弃，速度流停止后再从底盘当前位姿重新接上。零速流和其他速度指令一样会占住底盘，所以不操控时遥控端必须停止发布，而不是发零速。
 
 ## 关键参数
 
@@ -76,6 +76,7 @@ ch.tune({"pose_limits": {"max_linear_velocity": 0.3, "planner_mode": "axis_time"
 ## 常见坑
 
 - 速度指令是租约，停止写入后 `command_timeout_s` 内底盘停下。遥控要按固定频率持续写。
+- 位姿目标同样是租约，且会被新鲜的速度流压掉：两者同时持续重写，底盘会一直在速度模式下，永远到不了目标。
 - `pose_limits` 只影响位姿模式，速度模式始终用 `chassis` 里的 `max_*_velocity`。tune 时不检查是否超过这些上限，要自己保证不超过底盘能力。
 - 差速底盘位姿模式到不了正侧方的目标，调用方要先把底盘转向目标。
 - 里程计时间戳比当前时间早引擎 `feedback_timeout_s` 以上会被拒收，不报错，位姿只靠推算。实机要检查里程计和控制器时钟是否一致。

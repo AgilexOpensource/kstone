@@ -84,6 +84,34 @@ TEST_CASE("chassis: command arbitration by priority and freshness") {
     CHECK_FALSE(ctrl.command_snapshot().pose_mode);
 }
 
+TEST_CASE("chassis: a velocity command drops the pose plan and its reported ramp pose") {
+    auto ctrl = started({}, 0.01);
+    const Pose2D goal{1.0, 0.0, 0.0};
+    double now = 0.0;
+    for (int i = 0; i < 20; ++i) {
+        now += 0.01;
+        REQUIRE(ctrl.submit_pose(goal, now));
+        ctrl.step(now);
+    }
+    const Pose2D planned = ctrl.ramp_pose();
+    CHECK(std::hypot(planned.x - ctrl.pose().x, planned.y - ctrl.pose().y) >
+          1e-3);  // a plan, ahead of the base
+
+    REQUIRE(ctrl.submit_velocity({0.2, 0.0, 0.0}, now));
+    CHECK_FALSE(ctrl.command_snapshot().pose_mode);
+    CHECK(ctrl.ramp_pose().x == doctest::Approx(ctrl.pose().x));
+    CHECK(ctrl.ramp_pose().y == doctest::Approx(ctrl.pose().y));
+    for (int i = 0; i < 20; ++i) {
+        now += 0.01;
+        REQUIRE(ctrl.submit_velocity({0.2, 0.0, 0.0}, now));
+        ctrl.step(now);
+        // Velocity mode has no trajectory: planned follows the base instead of freezing where the goal was.
+        CHECK(ctrl.ramp_pose().x == doctest::Approx(ctrl.pose().x));
+        CHECK(ctrl.ramp_pose().yaw == doctest::Approx(ctrl.pose().yaw));
+    }
+    CHECK(ctrl.pose().x > planned.x - 1.0);  // moved on, not held by the old plan
+}
+
 TEST_CASE("chassis: scheduler discontinuity faults and resynchronizes") {
     ChassisConfig config;
     config.max_dt_s = 0.05;

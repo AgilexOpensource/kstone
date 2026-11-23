@@ -11,6 +11,7 @@
 
 #include <Eigen/Geometry>
 
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -528,10 +529,15 @@ struct ChassisModuleConfig {
         pose_limits;  ///< Tune-only; configure() seeds it from the controller (chassis max_* fields).
 };
 
+/// Port priorities of the chassis motion inputs: a velocity command outranks a pose target, so a teleoperator
+/// can take the base over from a tracking goal and the goal resumes once the velocity stream goes quiet.
+inline constexpr int kChassisVelocityPriority = 20;
+inline constexpr int kChassisPosePriority = 10;
+
 /// ChassisController outside the QP: locks the free-flyer root and writes its pose into q in prepare(); z = 0 is the ground contact.
 /// Starts on the first step; a skipped step (module disabled) pauses and resynchronises the controller.
-/// Port `velocity` (vx, vy, wz) and `pose_target` (x, y, yaw in world) both lapse after command_timeout_s; the
-/// last write of either is submitted as source "port" on the next step.
+/// Port `velocity` (vx, vy, wz) and `pose_target` (x, y, yaw in world) both lapse after command_timeout_s; both are
+/// submitted as source "port" on the next step, velocity first, and velocity drops a pose target while it is fresh.
 /// Outputs: vx, vy, wz, x, y, yaw, active, fault, nominal_vx/vy/wz (unshaped target), planned (ramp pose), target
 /// (pose command, NaN otherwise), state, reason, command (source), command_mode, command_priority, command_fresh,
 /// source (pose source), phase (differential pose phase).
@@ -572,8 +578,8 @@ class KSTONE_EXPORT ChassisModule final : public Module {
     std::string source_{"port"};
     Twist2D port_command_;
     Pose2D port_pose_target_;
-    std::size_t port_mode_{0};  ///< Port index of the last write: 0 velocity, 1 pose_target.
-    bool port_pending_{false};
+    std::array<bool, 2> port_pending_{};  ///< Per port: written since the last step.
+    std::size_t port_mode_{0};  ///< Port index of the last accepted submission: 0 velocity, 1 pose_target.
     std::optional<double> port_stamp_;  ///< Cycle time the last port command was submitted.
     double now_{0.0};
 };

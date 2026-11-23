@@ -1691,8 +1691,9 @@ Status ChassisModule::configure(ModuleSetup& setup) {
 
 Status ChassisModule::read_port(std::size_t index, PortValue& out) const {
     if (index > 1) return Module::read_port(index, out);
-    const bool fresh = port_mode_ == index &&
-                       (port_pending_ || (port_stamp_ && now_ - *port_stamp_ <= ports()[index].timeout));
+    const bool fresh =
+        port_mode_ == index &&
+        (port_pending_[index] || (port_stamp_ && now_ - *port_stamp_ <= ports()[index].timeout));
     out.vector.resize(3);
     if (index == 0) {
         const Twist2D t = fresh ? port_command_ : Twist2D{};
@@ -1713,8 +1714,7 @@ Status ChassisModule::on_write_port(std::size_t index, const PortValue& value) {
         port_command_ = {value.vector[0], value.vector[1], value.vector[2]};
     else
         port_pose_target_ = {value.vector[0], value.vector[1], value.vector[2]};
-    port_mode_ = index;
-    port_pending_ = true;
+    port_pending_[index] = true;
     return {};
 }
 
@@ -1820,15 +1820,21 @@ Status ChassisModule::prepare(Cycle& cycle) {
     if (cycle.dt > 0.0)
         if (Status s = c.set_scheduler_period(cycle.dt); !s) return s;
     now_ = cycle.now;
-    if (port_pending_) {
-        port_pending_ = false;
-        Result<bool> accepted = port_mode_ == 0 ? c.submit_velocity(port_command_, cycle.now, source_)
-                                                : c.submit_pose(port_pose_target_, cycle.now, source_);
+    // Submit every port written since the last step; the chassis controller's own priority arbitration keeps the
+    // higher-priority command and drops the other one, so a fresh velocity stream suspends a pose target.
+    for (std::size_t index = 0; index < port_pending_.size(); ++index) {
+        if (!port_pending_[index]) continue;
+        port_pending_[index] = false;
+        Result<bool> accepted =
+            index == 0 ? c.submit_velocity(port_command_, cycle.now, source_, kChassisVelocityPriority)
+                       : c.submit_pose(port_pose_target_, cycle.now, source_, kChassisPosePriority);
         if (!accepted) return std::move(accepted).error();
-        if (*accepted)
+        if (*accepted) {
+            port_mode_ = index;
             port_stamp_ = cycle.now;
-        else
+        } else if (port_mode_ == index) {
             port_stamp_.reset();
+        }
     }
     output_ = c.step(cycle.now);
     command_ = c.command_snapshot();
